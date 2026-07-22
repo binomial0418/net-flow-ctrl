@@ -17,28 +17,11 @@ static String ipToStr(uint32_t lwipAddr) {
   return String(b);
 }
 
-// Every route goes through this. The core regenerates its nonce only when a
-// challenge is issued and never expires it on success, so the 5s polling the
-// page does reuses one nonce instead of re-prompting.
-static bool guard() {
-  if (s_srv.authenticate(NFC_ADMIN_USER, NFC_ADMIN_PASS)) {
-    return true;
-  }
-  s_srv.requestAuthentication(DIGEST_AUTH, NFC_AUTH_REALM, "需要登入");
-  return false;
-}
-
 static void handleRoot() {
-  if (!guard()) {
-    return;
-  }
   s_srv.send_P(200, "text/html; charset=utf-8", NFC_PAGE);
 }
 
 static void handleStatus() {
-  if (!guard()) {
-    return;
-  }
   JsonDocument doc;
   bool up = WiFi.STA.connected() && WiFi.STA.hasIP();
   doc["staUp"] = up;
@@ -76,9 +59,6 @@ static void handleStatus() {
 }
 
 static void handleDevices() {
-  if (!guard()) {
-    return;
-  }
   JsonDocument doc;
   JsonArray arr = doc["devices"].to<JsonArray>();
   char mac[18];
@@ -132,9 +112,6 @@ static uint16_t clampMin(int v) {
 }
 
 static void handleDevice() {
-  if (!guard()) {
-    return;
-  }
   JsonDocument doc;
   if (!readBody(doc)) {
     return;
@@ -171,9 +148,6 @@ static void handleDevice() {
 }
 
 static void handleGlobal() {
-  if (!guard()) {
-    return;
-  }
   JsonDocument doc;
   if (!readBody(doc)) {
     return;
@@ -218,9 +192,6 @@ static void handleGlobal() {
 }
 
 static void handleScan() {
-  if (!guard()) {
-    return;
-  }
   JsonDocument doc;
   JsonArray arr = doc["nets"].to<JsonArray>();
   int n = WiFi.scanNetworks();
@@ -236,9 +207,6 @@ static void handleScan() {
 }
 
 static void handleResetUsage() {
-  if (!guard()) {
-    return;
-  }
   nfcResetUsage();
   s_srv.send(200, "application/json", "{\"ok\":true}");
 }

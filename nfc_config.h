@@ -6,13 +6,6 @@
 #define NFC_MAX_DEVICES 16
 #define NFC_NAME_LEN    24
 
-// Portal login. Hardcoded for now. Digest auth is used rather than basic: the
-// portal also answers on the STA side, and basic would put the password (only
-// base64'd) on the wire of the home LAN with every poll.
-#define NFC_ADMIN_USER  "admin"
-#define NFC_ADMIN_PASS  "700418"
-#define NFC_AUTH_REALM  "net-flow-ctrl"
-
 // A device only burns quota while it is actually pushing traffic. This is how
 // long it may stay silent before we stop counting it as "online".
 #define NFC_IDLE_GRACE_SEC 60
