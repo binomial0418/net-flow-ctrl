@@ -16,12 +16,19 @@ void nfcStoreBegin() {
 
 void nfcStoreLoadCfg() {
   memset(&g_cfg, 0, sizeof(g_cfg));
+  g_cfg.activeKBmin = NFC_ACTIVE_KBMIN_DEFAULT;  // default before any load fills it
   size_t n = s_prefs.getBytesLength("cfg");
   if (n == sizeof(GlobalCfg)) {
     s_prefs.getBytes("cfg", &g_cfg, sizeof(GlobalCfg));
+  } else if (n > 0 && n < sizeof(GlobalCfg)) {
+    // An older, shorter layout: load exactly what was stored (fields kept their
+    // offsets, new ones are appended), leaving the trailing additions at their
+    // defaults, then rewrite in the current layout.
+    s_prefs.getBytes("cfg", &g_cfg, n);
+    nfcStoreSaveCfg();
   } else {
     strlcpy(g_cfg.apSsid, "NetFlowCtrl", sizeof(g_cfg.apSsid));
-    strlcpy(g_cfg.apPass, "12345678", sizeof(g_cfg.apPass));
+    strlcpy(g_cfg.apPass, "0988085240", sizeof(g_cfg.apPass));
     strlcpy(g_cfg.tz, "CST-8", sizeof(g_cfg.tz));
     strlcpy(g_cfg.ntp, "pool.ntp.org", sizeof(g_cfg.ntp));
     g_cfg.resetMin = 5 * 60;  // 05:00

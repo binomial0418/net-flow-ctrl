@@ -76,6 +76,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <div><label>時區 (POSIX TZ)</label><input id="tz" placeholder="CST-8"></div>
     <div><label>NTP 伺服器</label><input id="ntp" placeholder="pool.ntp.org"></div>
     <div><label>未知新裝置</label><select id="defAllow"><option value="1">預設允許連外</option><option value="0">預設封鎖連外</option></select></div>
+    <div><label>計時流量門檻（KB/分）</label><input id="actKB" type="number" min="1" max="60000"><div class="hint">每分鐘流量達此值才累計使用時數，低於則視為閒置</div></div>
   </div>
   <div class="row"><button id="saveG">儲存並套用</button><span class="hint">變更對外 WiFi 會重新連線，AP 熱點不中斷</span></div>
 </div>
@@ -112,6 +113,18 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <button type="button" id="dSave">儲存</button></span>
   </div>
 </form></dialog>
+
+<dialog id="edlg"><form method="dialog" class="dlg">
+  <h2 id="eTitle" style="margin:0 0 12px;font-size:16px"></h2>
+  <div><label>本日延長至</label><input id="eUntil" type="time"></div>
+  <div class="hint">在此時刻前，即使超過可用時段或每日時數上限，都暫時放行連外。<b>僅限今日有效</b>，跨過每日重置時間即失效。</div>
+  <div id="eCur" class="hint" style="margin-top:8px"></div>
+  <div class="row" style="justify-content:space-between">
+    <button type="button" class="danger" id="eClear">取消延長</button>
+    <span><button type="button" class="sec" id="eCancel">關閉</button>
+    <button type="button" id="eSave">套用</button></span>
+  </div>
+</form></dialog>
 <div id="toast"></div>
 
 <script>
@@ -131,6 +144,7 @@ async function loadStatus(){
   $('st').innerHTML=
     '<div>對外連線<b>'+(s.staUp?s.staSsid+' <span class="pill p-ok">已連線</span>':'<span class="pill p-bad">未連線</span>')+'</b></div>'+
     '<div>對外 IP<b>'+(s.staIp||'-')+(s.staUp?' ('+s.rssi+' dBm)':'')+'</b></div>'+
+    (s.mdns?'<div>本機網址<b>http://'+s.mdns+'</b></div>':'')+
     '<div>熱點<b>'+s.apSsid+' · '+s.apIp+'</b></div>'+
     '<div>目前時間<b>'+(s.timeValid?s.time:'<span class="pill p-warn">未校時</span>')+'</b></div>'+
     '<div>下次重置<b>'+hhmm(s.resetMin)+'</b></div>'+
@@ -138,6 +152,7 @@ async function loadStatus(){
   if(!$('staSsid').dataset.t){
     $('staSsid').value=s.staSsid;$('resetAt').value=hhmm(s.resetMin);
     $('tz').value=s.tz;$('ntp').value=s.ntp;$('defAllow').value=s.defaultAllow?'1':'0';
+    $('actKB').value=s.activeKBmin;
     $('staSsid').dataset.t=1;
   }
 }
@@ -157,12 +172,14 @@ async function loadDevs(){
   devs=(await jget('/api/devices')).devices;
   $('devs').innerHTML=devs.map((d,i)=>{
     const pct=d.quotaEnabled?Math.min(100,d.usedSec/(d.quotaMin*60)*100):0;
+    const ext=d.extendActive?'<div class="hint" style="color:var(--ok)">延長至 '+hhmm(d.extendUntil)+'</div>':'';
     return '<tr><td><b>'+d.name+'</b><div class="hint">'+d.mac+'</div></td>'+
-      '<td>'+(d.ip||'-')+'</td><td>'+reasonPill(d)+'</td>'+
+      '<td>'+(d.ip||'-')+'</td><td>'+reasonPill(d)+ext+'</td>'+
       '<td>'+dur(d.usedSec)+(d.quotaEnabled?' / '+dur(d.quotaMin*60)+'<div class="bar"><i style="width:'+pct+'%"></i></div>':'')+'</td>'+
       '<td>'+(d.winEnabled?hhmm(d.winStart)+'–'+hhmm(d.winEnd):'不限')+'</td>'+
       '<td>↑'+size(d.up)+'<div class="hint">↓'+size(d.down)+'</div></td>'+
-      '<td><button class="sec" onclick="edit('+i+')">設定</button></td></tr>';
+      '<td style="white-space:nowrap"><button class="sec" onclick="edit('+i+')">設定</button> '+
+      '<button class="sec" onclick="extendDlg('+i+')">本日延長</button></td></tr>';
   }).join('')||'<tr><td colspan="7" style="color:var(--mut)">尚無裝置連入</td></tr>';
 }
 window.edit=i=>{
@@ -185,9 +202,27 @@ $('dDel').onclick=async()=>{
   const r=await jpost('/api/device',{mac:cur.mac,remove:true});
   if(r){$('dlg').close();toast('已刪除');loadDevs()}
 };
+window.extendDlg=i=>{
+  cur=devs[i];
+  $('eTitle').textContent=cur.name+' · 本日延長';
+  $('eUntil').value=cur.extendUntil?hhmm(cur.extendUntil):'';
+  $('eCur').innerHTML=cur.extendActive?'目前延長至 <b>'+hhmm(cur.extendUntil)+'</b>':'目前未設定延長';
+  $('edlg').showModal();
+};
+$('eCancel').onclick=()=>$('edlg').close();
+$('eSave').onclick=async()=>{
+  if(!$('eUntil').value){toast('請先選擇時間');return}
+  const r=await jpost('/api/extend',{mac:cur.mac,untilMin:toMin($('eUntil').value)});
+  if(r){$('edlg').close();toast('已延長');loadDevs()}
+};
+$('eClear').onclick=async()=>{
+  const r=await jpost('/api/extend',{mac:cur.mac,cancel:true});
+  if(r){$('edlg').close();toast('已取消延長');loadDevs()}
+};
 $('saveG').onclick=async()=>{
   const r=await jpost('/api/global',{staSsid:$('staSsid').value,staPass:$('staPass').value,
-    resetMin:toMin($('resetAt').value),tz:$('tz').value,ntp:$('ntp').value,defaultAllow:$('defAllow').value==='1'});
+    resetMin:toMin($('resetAt').value),tz:$('tz').value,ntp:$('ntp').value,defaultAllow:$('defAllow').value==='1',
+    activeKBmin:+$('actKB').value});
   if(r){toast('已套用');$('staPass').value=''}
 };
 $('scanBtn').onclick=async()=>{

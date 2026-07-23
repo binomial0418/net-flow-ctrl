@@ -17,6 +17,18 @@ static String ipToStr(uint32_t lwipAddr) {
   return String(b);
 }
 
+// Current wall-clock minute-of-day; false when the clock has not synced.
+static bool portalNowMin(uint16_t &out) {
+  if (!g_timeValid) {
+    return false;
+  }
+  time_t now = time(nullptr);
+  struct tm t;
+  localtime_r(&now, &t);
+  out = (uint16_t)(t.tm_hour * 60 + t.tm_min);
+  return true;
+}
+
 static void handleRoot() {
   s_srv.send_P(200, "text/html; charset=utf-8", NFC_PAGE);
 }
@@ -30,10 +42,12 @@ static void handleStatus() {
   doc["rssi"] = up ? WiFi.RSSI() : 0;
   doc["apSsid"] = g_cfg.apSsid;
   doc["apIp"] = WiFi.AP.localIP().toString();
+  doc["mdns"] = up ? (String(NFC_MDNS_HOST) + ".local") : String();
   doc["resetMin"] = g_cfg.resetMin;
   doc["tz"] = g_cfg.tz;
   doc["ntp"] = g_cfg.ntp;
   doc["defaultAllow"] = g_cfg.defaultAllow;
+  doc["activeKBmin"] = g_cfg.activeKBmin;
   doc["timeValid"] = g_timeValid;
 
   char ts[32] = "";
@@ -59,6 +73,8 @@ static void handleStatus() {
 }
 
 static void handleDevices() {
+  uint16_t nowMin = 0;
+  bool haveNow = portalNowMin(nowMin);
   JsonDocument doc;
   JsonArray arr = doc["devices"].to<JsonArray>();
   char mac[18];
@@ -83,6 +99,10 @@ static void handleDevices() {
     o["manualBlock"] = g_dev[i].manualBlock;
     o["up"] = g_dev[i].upBytes;
     o["down"] = g_dev[i].downBytes;
+    // extendUntil: the target time if the extension is for today, else 0.
+    // extendActive: whether it is still ahead of the current time right now.
+    o["extendUntil"] = (g_dev[i].extendDay == g_dayKey) ? g_dev[i].extendMin : 0;
+    o["extendActive"] = haveNow && nfcExtensionActive(i, nowMin);
   }
   String out;
   serializeJson(doc, out);
@@ -179,6 +199,8 @@ static void handleGlobal() {
   }
   g_cfg.defaultAllow = doc["defaultAllow"] | true;
   nfcFilterSetDefaultAllow(g_cfg.defaultAllow);
+  int kb = doc["activeKBmin"] | (int)g_cfg.activeKBmin;
+  g_cfg.activeKBmin = (uint16_t)constrain(kb, 1, 60000);
   nfcStoreSaveCfg();
 
   // Answer before touching the radio: reassociating drops this very socket.
@@ -211,6 +233,48 @@ static void handleResetUsage() {
   s_srv.send(200, "application/json", "{\"ok\":true}");
 }
 
+// Set or clear a device's "extend today until" override.
+//   { mac, untilMin }     -> extend until untilMin (0..1439), today only
+//   { mac, cancel:true }  -> clear any extension
+static void handleExtend() {
+  JsonDocument doc;
+  if (!readBody(doc)) {
+    return;
+  }
+  uint8_t mac[6];
+  if (!nfcStrToMac(doc["mac"] | "", mac)) {
+    s_srv.send(400, "text/plain", "bad mac");
+    return;
+  }
+  int idx = nfcFindByMac(mac);
+  if (idx < 0) {
+    s_srv.send(404, "text/plain", "unknown device");
+    return;
+  }
+
+  if (doc["cancel"].is<bool>() && doc["cancel"].as<bool>()) {
+    g_dev[idx].extendMin = 0;
+    g_dev[idx].extendDay = 0;
+  } else {
+    // An extension is a target time, so it is meaningless without a clock, and
+    // it must be pinned to the current logical day to be a "today" grant.
+    if (!g_timeValid || g_dayKey == 0) {
+      s_srv.send(409, "text/plain", "clock not set");
+      return;
+    }
+    int until = doc["untilMin"] | -1;
+    if (until < 0 || until > 1439) {
+      s_srv.send(400, "text/plain", "bad untilMin");
+      return;
+    }
+    g_dev[idx].extendMin = (uint16_t)until;
+    g_dev[idx].extendDay = g_dayKey;
+  }
+  nfcStoreSaveDevices();
+  nfcSyncFilter();
+  s_srv.send(200, "application/json", "{\"ok\":true}");
+}
+
 void nfcPortalBegin() {
   s_srv.on("/", HTTP_GET, handleRoot);
   s_srv.on("/api/status", HTTP_GET, handleStatus);
@@ -219,6 +283,7 @@ void nfcPortalBegin() {
   s_srv.on("/api/global", HTTP_POST, handleGlobal);
   s_srv.on("/api/scan", HTTP_GET, handleScan);
   s_srv.on("/api/reset-usage", HTTP_POST, handleResetUsage);
+  s_srv.on("/api/extend", HTTP_POST, handleExtend);
   s_srv.onNotFound([]() {
     s_srv.sendHeader("Location", "/");
     s_srv.send(302, "text/plain", "");

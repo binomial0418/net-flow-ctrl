@@ -31,7 +31,6 @@ static volatile uint32_t s_blocked[NFC_MAX_DEVICES];
 static volatile uint32_t s_ip[NFC_MAX_DEVICES];  // observed, for display only
 static volatile uint32_t s_up[NFC_MAX_DEVICES];  // free-running, wraps
 static volatile uint32_t s_down[NFC_MAX_DEVICES];
-static volatile uint32_t s_lastActive[NFC_MAX_DEVICES];
 static volatile uint32_t s_defaultAllow = 1;
 
 static struct netif *s_apNetif = nullptr;
@@ -94,7 +93,6 @@ static err_t apInputHook(struct pbuf *p, struct netif *inp) {
           pbuf_free(p);
           return ERR_OK;
         } else {
-          s_lastActive[idx] = millis();
           s_up[idx] += p->tot_len;
         }
       }
@@ -159,7 +157,6 @@ void nfcFilterSetIdentity(int idx, const uint8_t *mac) {
   s_ip[idx] = 0;
   s_up[idx] = 0;
   s_down[idx] = 0;
-  s_lastActive[idx] = 0;
   s_valid[idx] = 1;
 }
 
@@ -169,7 +166,6 @@ void nfcFilterRemove(int idx) {
   s_blocked[idx] = 0;
   s_up[idx] = 0;
   s_down[idx] = 0;
-  s_lastActive[idx] = 0;
 }
 
 void nfcFilterSetBlocked(int idx, bool blocked) {
@@ -190,10 +186,6 @@ uint32_t nfcFilterUpBytes(int idx) {
 
 uint32_t nfcFilterDownBytes(int idx) {
   return s_down[idx];
-}
-
-uint32_t nfcFilterLastActiveMs(int idx) {
-  return s_lastActive[idx];
 }
 
 void nfcNaptEnable() {

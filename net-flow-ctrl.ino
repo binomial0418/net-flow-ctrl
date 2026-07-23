@@ -12,6 +12,7 @@
 #include "nfc_config.h"
 
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <time.h>
 #include "esp_wifi.h"
 #include "esp_wifi_types.h"
@@ -19,6 +20,7 @@
 static uint32_t s_lastTick = 0;
 static bool s_naptOn = false;
 static bool s_dnsPushed = false;
+static bool s_mdnsOn = false;
 
 // ---------------------------------------------------------------- time -----
 
@@ -93,6 +95,8 @@ void nfcResetUsage() {
     g_dev[i].usedSec = 0;
     g_dev[i].upBytes = 0;
     g_dev[i].downBytes = 0;
+    g_dev[i].extendMin = 0;  // a "today" extension does not cross the reset
+    g_dev[i].extendDay = 0;
   }
   nfcSyncFilter();
   nfcStoreSaveUsage(true);
@@ -143,7 +147,8 @@ static void refreshOnline() {
 }
 
 // Counters in the filter are free-running 32-bit and may wrap; unsigned
-// subtraction against the last snapshot stays correct across the wrap.
+// subtraction against the last snapshot stays correct across the wrap. The
+// per-tick delta is stashed for the activity test in accumulateUsage().
 static void collectBytes() {
   for (int i = 0; i < NFC_MAX_DEVICES; i++) {
     if (!g_dev[i].used) {
@@ -151,23 +156,28 @@ static void collectBytes() {
     }
     uint32_t up = nfcFilterUpBytes(i);
     uint32_t down = nfcFilterDownBytes(i);
-    g_dev[i].upBytes += up - g_rt[i].upSnapshot;
-    g_dev[i].downBytes += down - g_rt[i].downSnapshot;
+    uint32_t dUp = up - g_rt[i].upSnapshot;
+    uint32_t dDown = down - g_rt[i].downSnapshot;
+    g_dev[i].upBytes += dUp;
+    g_dev[i].downBytes += dDown;
     g_rt[i].upSnapshot = up;
     g_rt[i].downSnapshot = down;
+    g_rt[i].lastDeltaBytes = dUp + dDown;
   }
 }
 
-// Quota burns only while a device is actually using the uplink, so a phone
-// idling in a pocket overnight does not eat someone's whole day.
+// Usage time accrues only while a device is genuinely moving data: a second
+// counts when the trailing NFC_ACTIVE_WINDOW_SEC of traffic clears the byte
+// threshold, so a TV box sitting idle does not burn the daily allowance. The
+// window is rolled for every device (idle ones feed a 0) so it stays honest;
+// the second is only banked for a device that is online and currently allowed.
 static void accumulateUsage() {
-  uint32_t now = millis();
   for (int i = 0; i < NFC_MAX_DEVICES; i++) {
-    if (!g_dev[i].used || !g_rt[i].online || g_rt[i].reason != NFC_ALLOWED) {
+    if (!g_dev[i].used) {
       continue;
     }
-    uint32_t last = nfcFilterLastActiveMs(i);
-    if (last != 0 && (now - last) < (NFC_IDLE_GRACE_SEC * 1000UL)) {
+    bool active = nfcActivityTick(i, g_rt[i].lastDeltaBytes);
+    if (active && g_rt[i].online && g_rt[i].reason == NFC_ALLOWED) {
       g_dev[i].usedSec++;
     }
   }
@@ -201,6 +211,15 @@ static void tick() {
     nfcApplyUpstreamDns();
     s_dnsPushed = true;
     nfcApplyTimeCfg();
+  }
+  // Advertise the portal on the home LAN once the uplink is up, so it can be
+  // reached at http://<host>.local without hunting for the DHCP-assigned IP.
+  if (g_uplinkUp && !s_mdnsOn) {
+    if (MDNS.begin(NFC_MDNS_HOST)) {
+      MDNS.addService("http", "tcp", 80);
+      s_mdnsOn = true;
+      log_i("mDNS up: http://%s.local", NFC_MDNS_HOST);
+    }
   }
 
   refreshOnline();

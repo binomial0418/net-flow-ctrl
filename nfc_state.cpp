@@ -68,6 +68,35 @@ bool nfcInWindow(uint16_t nowMin, uint16_t start, uint16_t end) {
   return nowMin >= start || nowMin < end;
 }
 
+// A "extend today until HH:MM" override. extendDay pins it to one logical day,
+// so it self-expires at the daily reset even if never cleared. The before/after
+// comparison is done in logical-day-relative minutes (shifted by the reset
+// offset) so an extension into the small hours -- e.g. now 23:00, until 01:00,
+// reset 05:00 -- is correctly seen as still ahead of "now".
+bool nfcExtensionActive(int idx, uint16_t nowMin) {
+  const DeviceRule &d = g_dev[idx];
+  if (d.extendDay == 0 || d.extendDay != g_dayKey) {
+    return false;
+  }
+  uint16_t reset = g_cfg.resetMin;
+  uint16_t nowRel = (uint16_t)((nowMin + 1440u - reset) % 1440u);
+  uint16_t tgtRel = (uint16_t)((d.extendMin + 1440u - reset) % 1440u);
+  return nowRel < tgtRel;
+}
+
+// Push this tick's byte delta into the device's trailing activity window and
+// report whether the window now holds enough traffic to count the second as
+// real usage. Call once per second for every used device (delta 0 when idle)
+// so the window always reflects the true last NFC_ACTIVE_WINDOW_SEC seconds.
+bool nfcActivityTick(int idx, uint32_t deltaBytes) {
+  DeviceRt &rt = g_rt[idx];
+  rt.actSum -= rt.actWin[rt.actIdx];  // drop the second aging out of the window
+  rt.actWin[rt.actIdx] = deltaBytes;
+  rt.actSum += deltaBytes;
+  rt.actIdx = (uint16_t)((rt.actIdx + 1) % NFC_ACTIVE_WINDOW_SEC);
+  return rt.actSum >= (uint32_t)g_cfg.activeKBmin * 1024UL;
+}
+
 BlockReason nfcEvaluate(int idx, uint16_t nowMin) {
   const DeviceRule &d = g_dev[idx];
   if (d.manualBlock) {
@@ -78,6 +107,12 @@ BlockReason nfcEvaluate(int idx, uint16_t nowMin) {
   }
   if (!g_uplinkUp) {
     return NFC_BLOCK_NO_UPLINK;
+  }
+  // A live "extend today" grant beats both the quota and the window. It needs a
+  // clock (it is a target time), so when the clock is unset it simply reads as
+  // inactive and the limits below still apply.
+  if (g_timeValid && nfcExtensionActive(idx, nowMin)) {
+    return NFC_ALLOWED;
   }
   // The quota is a plain elapsed-seconds counter, so it is enforced even with
   // no clock: it survives a reboot via NVS, and letting it lapse would mean a
