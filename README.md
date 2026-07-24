@@ -374,8 +374,6 @@ arduino-cli compile -b esp32:esp32:esp32:UploadSpeed=115200 --upload -p /dev/cu.
 * 本日延長：跨午夜、跨日失效、無時鐘不生效、蓋過時數與時段
 * 活躍視窗：背景雜訊不計、串流達門檻計時、停止後 60 秒排空停錶、緩衝式播放不斷錶
 
-主機測試以 stub `Arduino.h` 直接編譯 `nfc_state.cpp`，全部通過。（實機的 NAPT 轉發、封鎖、mDNS 等需在硬體上驗證。）
-
 ---
 
 ## 已知限制
@@ -387,5 +385,3 @@ arduino-cli compile -b esp32:esp32:esp32:UploadSpeed=115200 --upload -p /dev/cu.
 * 掃描 WiFi 期間會短暫影響熱點連線（單一射頻硬體限制）。
 * **流量統計僅供顯示**，不作為限制條件（計時用的是活躍視窗，另一套邏輯）。
 * `netflow.local`（mDNS）僅在同一區網有效；VPN 遠端需用 IP + subnet router。
-* 本日延長只存在執行期＋NVS，非常規設定；跨日一定失效。
-* **實機僅驗證到開機、AP 啟動、設定頁與 API 可用、裝置登記與流量統計**；NAPT 對外轉發、實際封鎖、mDNS 解析尚未在硬體上完整驗證。
