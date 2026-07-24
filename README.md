@@ -286,7 +286,7 @@ arduino-cli compile -b esp32:esp32:esp32:UploadSpeed=115200 --upload -p /dev/cu.
 
 ## 使用
 
-1. 燒錄後連上熱點 **`NetFlowCtrl`** / 密碼 **`0988085240`**
+1. 燒錄後連上熱點 **`NetFlowCtrl`** / 密碼 **`12345678`**
 2. 開啟 **`http://192.168.4.1`**
 3. 在「全域設定」按**掃描**選擇你家的 WiFi、輸入密碼、**儲存並套用**
 4. 上游連上後會自動 NTP 校時（狀態列的「未校時」警告消失），並可改用家用網路的 **`http://netflow.local`** 存取

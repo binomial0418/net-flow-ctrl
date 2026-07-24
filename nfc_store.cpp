@@ -10,13 +10,12 @@
 static Preferences s_prefs;
 static uint32_t s_lastUsageSave = 0;
 
-void nfcStoreBegin() {
-  s_prefs.begin("netflow", false);
-}
+void nfcStoreBegin() { s_prefs.begin("netflow", false); }
 
 void nfcStoreLoadCfg() {
   memset(&g_cfg, 0, sizeof(g_cfg));
-  g_cfg.activeKBmin = NFC_ACTIVE_KBMIN_DEFAULT;  // default before any load fills it
+  g_cfg.activeKBmin =
+      NFC_ACTIVE_KBMIN_DEFAULT; // default before any load fills it
   size_t n = s_prefs.getBytesLength("cfg");
   if (n == sizeof(GlobalCfg)) {
     s_prefs.getBytes("cfg", &g_cfg, sizeof(GlobalCfg));
@@ -28,19 +27,17 @@ void nfcStoreLoadCfg() {
     nfcStoreSaveCfg();
   } else {
     strlcpy(g_cfg.apSsid, "NetFlowCtrl", sizeof(g_cfg.apSsid));
-    strlcpy(g_cfg.apPass, "0988085240", sizeof(g_cfg.apPass));
+    strlcpy(g_cfg.apPass, "`12345678", sizeof(g_cfg.apPass));
     strlcpy(g_cfg.tz, "CST-8", sizeof(g_cfg.tz));
     strlcpy(g_cfg.ntp, "pool.ntp.org", sizeof(g_cfg.ntp));
-    g_cfg.resetMin = 5 * 60;  // 05:00
+    g_cfg.resetMin = 5 * 60; // 05:00
     g_cfg.defaultAllow = true;
     nfcStoreSaveCfg();
   }
   g_dayKey = s_prefs.getULong("daykey", 0);
 }
 
-void nfcStoreSaveCfg() {
-  s_prefs.putBytes("cfg", &g_cfg, sizeof(GlobalCfg));
-}
+void nfcStoreSaveCfg() { s_prefs.putBytes("cfg", &g_cfg, sizeof(GlobalCfg)); }
 
 void nfcStoreLoadDevices() {
   memset(g_dev, 0, sizeof(g_dev));
