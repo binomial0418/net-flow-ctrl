@@ -75,13 +75,16 @@ void nfcSyncFilter() {
       continue;
     }
     BlockReason r = nfcEvaluate(i, nm);
-    if (r == NFC_BLOCK_QUOTA && g_rt[i].reason != NFC_BLOCK_QUOTA) {
+    if ((r == NFC_BLOCK_QUOTA || r == NFC_YT_QUOTA) && g_rt[i].reason != r) {
       quotaJustHit = true;
     }
     g_rt[i].reason = r;
     // NO_UPLINK is a state of the world, not a verdict on the device: leave
-    // the packets alone and let them fail on their own.
-    nfcFilterSetBlocked(i, r != NFC_ALLOWED && r != NFC_BLOCK_NO_UPLINK);
+    // the packets alone and let them fail on their own. The YT_* reasons only
+    // narrow the cut to YouTube; the rest of the uplink stays open.
+    bool ytLimit = r == NFC_YT_WINDOW || r == NFC_YT_QUOTA;
+    nfcFilterSetBlocked(i, r != NFC_ALLOWED && r != NFC_BLOCK_NO_UPLINK && !ytLimit);
+    nfcFilterSetYoutubeBlocked(i, g_dev[i].blockYoutube || ytLimit);
   }
   // Exhausting a quota is the one moment where losing the last few minutes of
   // counting would hand back a whole allowance, so checkpoint it immediately.
@@ -93,6 +96,7 @@ void nfcSyncFilter() {
 void nfcResetUsage() {
   for (int i = 0; i < NFC_MAX_DEVICES; i++) {
     g_dev[i].usedSec = 0;
+    g_dev[i].ytUsedSec = 0;
     g_dev[i].upBytes = 0;
     g_dev[i].downBytes = 0;
     g_dev[i].extendMin = 0;  // a "today" extension does not cross the reset
@@ -163,6 +167,12 @@ static void collectBytes() {
     g_rt[i].upSnapshot = up;
     g_rt[i].downSnapshot = down;
     g_rt[i].lastDeltaBytes = dUp + dDown;
+
+    uint32_t ytUp = nfcFilterYtUpBytes(i);
+    uint32_t ytDown = nfcFilterYtDownBytes(i);
+    g_rt[i].lastYtDeltaBytes = (ytUp - g_rt[i].ytUpSnapshot) + (ytDown - g_rt[i].ytDownSnapshot);
+    g_rt[i].ytUpSnapshot = ytUp;
+    g_rt[i].ytDownSnapshot = ytDown;
   }
 }
 
@@ -176,9 +186,16 @@ static void accumulateUsage() {
     if (!g_dev[i].used) {
       continue;
     }
-    bool active = nfcActivityTick(i, g_rt[i].lastDeltaBytes);
+    bool active = nfcActivityTick(g_rt[i].act, g_rt[i].lastDeltaBytes);
     if (active && g_rt[i].online && g_rt[i].reason == NFC_ALLOWED) {
       g_dev[i].usedSec++;
+    }
+    // YouTube time is informational and judged on its own share of the
+    // traffic, whatever the device's verdict: a YouTube cut simply leaves no
+    // video bytes to count.
+    bool ytActive = nfcActivityTick(g_rt[i].ytAct, g_rt[i].lastYtDeltaBytes);
+    if (ytActive && g_rt[i].online) {
+      g_dev[i].ytUsedSec++;
     }
   }
 }

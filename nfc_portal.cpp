@@ -91,12 +91,15 @@ static void handleDevices() {
     o["approved"] = g_dev[i].approved;
     o["reason"] = (uint8_t)g_rt[i].reason;
     o["usedSec"] = g_dev[i].usedSec;
+    o["ytUsedSec"] = g_dev[i].ytUsedSec;
     o["winEnabled"] = g_dev[i].winEnabled;
     o["winStart"] = g_dev[i].winStart;
     o["winEnd"] = g_dev[i].winEnd;
     o["quotaEnabled"] = g_dev[i].quotaEnabled;
     o["quotaMin"] = g_dev[i].quotaMin;
     o["manualBlock"] = g_dev[i].manualBlock;
+    o["blockYoutube"] = g_dev[i].blockYoutube;
+    o["ytOnlyLimit"] = g_dev[i].ytOnlyLimit;
     o["up"] = g_dev[i].upBytes;
     o["down"] = g_dev[i].downBytes;
     // extendUntil: the target time if the extension is for today, else 0.
@@ -161,6 +164,8 @@ static void handleDevice() {
     int q = doc["quotaMin"] | 480;
     g_dev[idx].quotaMin = (uint16_t)constrain(q, 1, 1440);
     g_dev[idx].manualBlock = doc["manualBlock"] | false;
+    g_dev[idx].blockYoutube = doc["blockYoutube"] | false;
+    g_dev[idx].ytOnlyLimit = doc["ytOnlyLimit"] | false;
   }
   nfcStoreSaveDevices();
   nfcSyncFilter();

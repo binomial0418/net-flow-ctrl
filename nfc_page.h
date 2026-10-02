@@ -106,6 +106,10 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   <div class="hint">超出此時段即中斷連外。結束早於開始表示跨午夜。</div>
   <div class="chk"><input type="checkbox" id="dQuoEn"><label for="dQuoEn" style="margin:0">啟用每日累積連外時數上限</label></div>
   <div><label>上限（分鐘）</label><input id="dQuo" type="number" min="1" max="1440"><div class="hint">僅在裝置實際有連外流量時累計</div></div>
+  <div class="chk"><input type="checkbox" id="dYtOnly"><label for="dYtOnly" style="margin:0">只限 YouTube</label></div>
+  <div class="hint">勾選後，超出時段或時數用盡時<b>只中斷 YouTube</b>，其他網路照常可用。</div>
+  <div class="chk"><input type="checkbox" id="dYtBlk"><label for="dYtBlk" style="margin:0">封鎖 YouTube</label></div>
+  <div class="hint">任何時候都不可連 YouTube（本日延長也不解除）。</div>
   <div class="chk"><input type="checkbox" id="dManual"><label for="dManual" style="margin:0">手動永久封鎖（不受每日重置影響）</label></div>
   <div class="row" style="justify-content:space-between">
     <button type="button" class="danger" id="dDel">刪除</button>
@@ -165,6 +169,8 @@ function reasonPill(d){
     case 3:return '<span class="pill p-bad">時數用盡</span>';
     case 4:return '<span class="pill p-warn">無上游</span>';
     case 5:return '<span class="pill p-warn">未核准</span>';
+    case 6:return '<span class="pill p-warn">YouTube 已斷</span><div class="hint">非可用時段</div>';
+    case 7:return '<span class="pill p-warn">YouTube 已斷</span><div class="hint">時數用盡</div>';
     default:return '<span class="pill p-off">—</span>';
   }
 }
@@ -173,9 +179,10 @@ async function loadDevs(){
   $('devs').innerHTML=devs.map((d,i)=>{
     const pct=d.quotaEnabled?Math.min(100,d.usedSec/(d.quotaMin*60)*100):0;
     const ext=d.extendActive?'<div class="hint" style="color:var(--ok)">延長至 '+hhmm(d.extendUntil)+'</div>':'';
+    const yt=d.blockYoutube?'<div class="hint" style="color:var(--bad)">封鎖 YouTube</div>':'';
     return '<tr><td><b>'+d.name+'</b><div class="hint">'+d.mac+'</div></td>'+
-      '<td>'+(d.ip||'-')+'</td><td>'+reasonPill(d)+ext+'</td>'+
-      '<td>'+dur(d.usedSec)+(d.quotaEnabled?' / '+dur(d.quotaMin*60)+'<div class="bar"><i style="width:'+pct+'%"></i></div>':'')+'</td>'+
+      '<td>'+(d.ip||'-')+'</td><td>'+reasonPill(d)+ext+yt+'</td>'+
+      '<td>'+dur(d.usedSec)+(d.quotaEnabled?' / '+dur(d.quotaMin*60)+'<div class="bar"><i style="width:'+pct+'%"></i></div>':'')+'<div class="hint">YouTube '+dur(d.ytUsedSec)+'</div></td>'+
       '<td>'+(d.winEnabled?hhmm(d.winStart)+'–'+hhmm(d.winEnd):'不限')+'</td>'+
       '<td>↑'+size(d.up)+'<div class="hint">↓'+size(d.down)+'</div></td>'+
       '<td style="white-space:nowrap"><button class="sec" onclick="edit('+i+')">設定</button> '+
@@ -188,13 +195,15 @@ window.edit=i=>{
   $('dName').value=cur.name;$('dAppr').checked=cur.approved;$('dWinEn').checked=cur.winEnabled;
   $('dWinS').value=hhmm(cur.winStart);$('dWinE').value=hhmm(cur.winEnd);
   $('dQuoEn').checked=cur.quotaEnabled;$('dQuo').value=cur.quotaMin;
+  $('dYtOnly').checked=cur.ytOnlyLimit;$('dYtBlk').checked=cur.blockYoutube;
   $('dManual').checked=cur.manualBlock;$('dlg').showModal();
 };
 $('dCancel').onclick=()=>$('dlg').close();
 $('dSave').onclick=async()=>{
   const r=await jpost('/api/device',{mac:cur.mac,name:$('dName').value,approved:$('dAppr').checked,
     winEnabled:$('dWinEn').checked,winStart:toMin($('dWinS').value),winEnd:toMin($('dWinE').value),
-    quotaEnabled:$('dQuoEn').checked,quotaMin:+$('dQuo').value,manualBlock:$('dManual').checked});
+    quotaEnabled:$('dQuoEn').checked,quotaMin:+$('dQuo').value,manualBlock:$('dManual').checked,
+    ytOnlyLimit:$('dYtOnly').checked,blockYoutube:$('dYtBlk').checked});
   if(r){$('dlg').close();toast('已儲存');loadDevs()}
 };
 $('dDel').onclick=async()=>{

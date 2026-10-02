@@ -84,17 +84,16 @@ bool nfcExtensionActive(int idx, uint16_t nowMin) {
   return nowRel < tgtRel;
 }
 
-// Push this tick's byte delta into the device's trailing activity window and
-// report whether the window now holds enough traffic to count the second as
-// real usage. Call once per second for every used device (delta 0 when idle)
-// so the window always reflects the true last NFC_ACTIVE_WINDOW_SEC seconds.
-bool nfcActivityTick(int idx, uint32_t deltaBytes) {
-  DeviceRt &rt = g_rt[idx];
-  rt.actSum -= rt.actWin[rt.actIdx];  // drop the second aging out of the window
-  rt.actWin[rt.actIdx] = deltaBytes;
-  rt.actSum += deltaBytes;
-  rt.actIdx = (uint16_t)((rt.actIdx + 1) % NFC_ACTIVE_WINDOW_SEC);
-  return rt.actSum >= (uint32_t)g_cfg.activeKBmin * 1024UL;
+// Push this tick's byte delta into a trailing activity window and report
+// whether the window now holds enough traffic to count the second as real
+// usage. Call once per second for every used device (delta 0 when idle) so the
+// window always reflects the true last NFC_ACTIVE_WINDOW_SEC seconds.
+bool nfcActivityTick(ActWindow &w, uint32_t deltaBytes) {
+  w.sum -= w.win[w.idx];  // drop the second aging out of the window
+  w.win[w.idx] = deltaBytes;
+  w.sum += deltaBytes;
+  w.idx = (uint16_t)((w.idx + 1) % NFC_ACTIVE_WINDOW_SEC);
+  return w.sum >= (uint32_t)g_cfg.activeKBmin * 1024UL;
 }
 
 BlockReason nfcEvaluate(int idx, uint16_t nowMin) {
@@ -118,13 +117,13 @@ BlockReason nfcEvaluate(int idx, uint16_t nowMin) {
   // no clock: it survives a reboot via NVS, and letting it lapse would mean a
   // power cycle hands out a fresh allowance until NTP lands.
   if (d.quotaEnabled && d.usedSec >= (uint32_t)d.quotaMin * 60UL) {
-    return NFC_BLOCK_QUOTA;
+    return d.ytOnlyLimit ? NFC_YT_QUOTA : NFC_BLOCK_QUOTA;
   }
   // A time window genuinely cannot be judged without knowing the time. Fail
   // open here rather than cutting the house off on a bad NTP day -- the portal
   // flags the clock as unset, and the quota above still holds the line.
   if (g_timeValid && d.winEnabled && !nfcInWindow(nowMin, d.winStart, d.winEnd)) {
-    return NFC_BLOCK_WINDOW;
+    return d.ytOnlyLimit ? NFC_YT_WINDOW : NFC_BLOCK_WINDOW;
   }
   return NFC_ALLOWED;
 }

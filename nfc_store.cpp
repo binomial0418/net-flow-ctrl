@@ -2,6 +2,7 @@
 #include "nfc_config.h"
 
 #include <Preferences.h>
+#include <stddef.h>
 
 // Usage counters are rewritten on a slow cadence: at ~10 min a full year of
 // uptime costs ~52k NVS writes, comfortably inside the flash endurance budget.
@@ -42,8 +43,22 @@ void nfcStoreSaveCfg() { s_prefs.putBytes("cfg", &g_cfg, sizeof(GlobalCfg)); }
 void nfcStoreLoadDevices() {
   memset(g_dev, 0, sizeof(g_dev));
   size_t n = s_prefs.getBytesLength("devs");
+  size_t stride = n / NFC_MAX_DEVICES;
   if (n == sizeof(g_dev)) {
     s_prefs.getBytes("devs", g_dev, sizeof(g_dev));
+  } else if (n % NFC_MAX_DEVICES == 0 && stride >= offsetof(DeviceRule, blockYoutube) && stride < sizeof(DeviceRule)) {
+    // An older, shorter record layout: fields kept their offsets and new ones
+    // were appended, so copy each record's stored prefix, leave the additions
+    // zeroed (= off), then rewrite in the current layout.
+    uint8_t *buf = (uint8_t *)malloc(n);
+    if (buf != nullptr) {
+      s_prefs.getBytes("devs", buf, n);
+      for (int i = 0; i < NFC_MAX_DEVICES; i++) {
+        memcpy(&g_dev[i], buf + i * stride, stride);
+      }
+      free(buf);
+      nfcStoreSaveDevices();
+    }
   }
   memset(g_rt, 0, sizeof(g_rt));
 }

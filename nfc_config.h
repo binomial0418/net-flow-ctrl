@@ -25,7 +25,9 @@
 #define NFC_ACTIVE_KBMIN_DEFAULT 200
 
 // Persisted per-device rule. usedSec/usedBytes ride along so a reboot does not
-// hand back a fresh quota.
+// hand back a fresh quota. Keep new fields at the end: the loader migrates an
+// older, shorter record by filling only what it stored and zeroing the rest
+// (see nfcStoreLoadDevices).
 struct DeviceRule {
   uint8_t  mac[6];
   char     name[NFC_NAME_LEN];
@@ -45,6 +47,15 @@ struct DeviceRule {
   // the daily reset. Persisted so a reboot mid-evening does not drop it.
   uint16_t extendMin;     // target time, minutes from midnight
   uint32_t extendDay;     // g_dayKey this applies to; 0 = no extension
+  // YouTube rules (DNS-based, see nfc_filter.cpp). blockYoutube cuts YouTube
+  // at all times; ytOnlyLimit turns a tripped window/quota into a YouTube-only
+  // cut instead of a full uplink cut.
+  bool     blockYoutube;
+  bool     ytOnlyLimit;
+  // Seconds today spent actually streaming YouTube video (traffic to the
+  // learned googlevideo.com addresses), judged by the same trailing-window
+  // test as usedSec. Display only: no rule reads it.
+  uint32_t ytUsedSec;
 };
 
 struct GlobalCfg {
@@ -70,6 +81,17 @@ enum BlockReason : uint8_t {
   NFC_BLOCK_QUOTA,
   NFC_BLOCK_NO_UPLINK,
   NFC_BLOCK_UNAPPROVED,
+  // A limit tripped on a device with ytOnlyLimit: only YouTube is cut.
+  NFC_YT_WINDOW,
+  NFC_YT_QUOTA,
+};
+
+// Trailing per-second byte-delta ring for the activity test. Runtime only;
+// never persisted, so a reboot simply starts the window fresh.
+struct ActWindow {
+  uint32_t win[NFC_ACTIVE_WINDOW_SEC];
+  uint32_t sum;  // running total of win, kept in step to avoid re-summing
+  uint16_t idx;  // next slot to overwrite
 };
 
 struct DeviceRt {
@@ -78,12 +100,12 @@ struct DeviceRt {
   uint32_t    upSnapshot;  // last value read out of the filter counters
   uint32_t    downSnapshot;
   uint32_t    lastDeltaBytes;  // up+down moved in the most recent tick
+  uint32_t    ytUpSnapshot;    // same, for the YouTube-video share of the traffic
+  uint32_t    ytDownSnapshot;
+  uint32_t    lastYtDeltaBytes;
   BlockReason reason;
-  // Trailing per-second byte-delta ring for the activity test. Runtime only;
-  // never persisted, so a reboot simply starts the window fresh.
-  uint32_t    actWin[NFC_ACTIVE_WINDOW_SEC];
-  uint32_t    actSum;      // running total of actWin, kept in step to avoid re-summing
-  uint16_t    actIdx;      // next slot to overwrite
+  ActWindow   act;    // all uplink traffic -> usedSec
+  ActWindow   ytAct;  // YouTube video traffic only -> ytUsedSec
 };
 
 extern GlobalCfg  g_cfg;
@@ -100,7 +122,7 @@ void nfcMacToStr(const uint8_t *mac, char *out);  // out >= 18 bytes
 bool nfcStrToMac(const char *s, uint8_t *mac);
 bool nfcInWindow(uint16_t nowMin, uint16_t start, uint16_t end);
 bool nfcExtensionActive(int idx, uint16_t nowMin);  // "extend today" override in force?
-bool nfcActivityTick(int idx, uint32_t deltaBytes);  // roll the window; true = counts as active
+bool nfcActivityTick(ActWindow &w, uint32_t deltaBytes);  // roll the window; true = counts as active
 BlockReason nfcEvaluate(int idx, uint16_t nowMin);
 
 // --- persistence (nfc_store.cpp) -------------------------------------------
@@ -116,10 +138,13 @@ void nfcFilterInstall();  // wraps the AP netif hooks
 void nfcFilterSetIdentity(int idx, const uint8_t *mac);  // publish slot to the packet path
 void nfcFilterRemove(int idx);
 void nfcFilterSetBlocked(int idx, bool blocked);
+void nfcFilterSetYoutubeBlocked(int idx, bool blocked);
 void nfcFilterSetDefaultAllow(bool allow);
 uint32_t nfcFilterIp(int idx);  // last source IP seen from this MAC, 0 = unknown
 uint32_t nfcFilterUpBytes(int idx);
 uint32_t nfcFilterDownBytes(int idx);
+uint32_t nfcFilterYtUpBytes(int idx);    // the YouTube-video share of the above
+uint32_t nfcFilterYtDownBytes(int idx);
 void nfcNaptEnable();
 void nfcApplyUpstreamDns();
 
