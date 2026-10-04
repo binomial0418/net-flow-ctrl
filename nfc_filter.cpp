@@ -14,13 +14,15 @@
 // leave a gap between association and the DHCP lease being observed, during
 // which a blocked device could reconnect and slip traffic through.
 //
-// YouTube is cut by name, not by address: its front-ends share IPs with the
-// rest of Google, so a device under a YouTube block gets an NXDOMAIN answered
-// in place of its resolver for any YouTube domain. To keep that from being
-// side-stepped, the same device loses DNS-over-TLS (853) and DNS-over-HTTPS to
-// the well-known public resolvers -- clients then fall back to plain DNS. And
-// because a video already playing keeps its connection to the video CDN, the
-// googlevideo.com addresses seen in DNS answers are remembered and dropped too.
+// YouTube is recognised by name, not by address: its front-ends share IPs with
+// the rest of Google. Both cutting and timing it depend on seeing DNS, so every
+// device loses DNS-over-TLS (853) and DNS-over-HTTPS to the well-known public
+// resolvers, and falls back to plain DNS. (Google TV, for one, otherwise sends
+// its googlevideo.com lookups to 8.8.8.8 over TLS and is never seen.) A device
+// under a YouTube block then gets an NXDOMAIN answered in place of its resolver
+// for any YouTube domain. And because a video already playing keeps its
+// connection to the video CDN, the googlevideo.com addresses seen in DNS answers
+// are remembered: traffic to them is timed, and dropped under a block.
 #include "nfc_config.h"
 
 #include <WiFi.h>
@@ -51,6 +53,7 @@ static volatile uint32_t s_defaultAllow = 1;
 #define NFC_YT_IPS 64
 static volatile uint32_t s_ytIp[NFC_YT_IPS];
 static uint32_t s_ytIpNext = 0;
+
 
 static struct netif *s_apNetif = nullptr;
 static netif_input_fn s_origInput = nullptr;
@@ -98,10 +101,12 @@ static const char *const kYtDomains[] = {
 };
 
 // Public resolvers that answer DNS-over-HTTPS on their own IP; their 443 is
-// cut for a YouTube-blocked device so the client falls back to plain DNS.
+// cut for every device so the client falls back to plain DNS.
 static const uint8_t kDohIps[][4] = {
   {8, 8, 8, 8},     {8, 8, 4, 4},   {1, 1, 1, 1},   {1, 0, 0, 1},   {9, 9, 9, 9},     {149, 112, 112, 112},
   {208, 67, 222, 222}, {208, 67, 220, 220}, {94, 140, 14, 14}, {94, 140, 15, 15}, {185, 228, 168, 9},
+  {104, 16, 248, 249}, {104, 16, 249, 249},  // chrome.cloudflare-dns.com
+  {162, 159, 61, 4},   {172, 64, 41, 4},     // mozilla.cloudflare-dns.com
 };
 
 static bool nameUnder(const char *name, size_t len, const char *dom) {
@@ -274,13 +279,10 @@ static void sendNxdomain(const uint8_t *eth, const uint8_t *iph, const uint8_t *
   }
 }
 
-// Client -> uplink packet from a device under a YouTube block. True when it
-// must not be forwarded (dropped, or answered here in place of the resolver).
-static bool ytIntercept(const uint8_t *eth, const uint8_t *end) {
+// Client -> uplink packet: true for encrypted DNS, which is never forwarded so
+// that every lookup stays visible.
+static bool isEncryptedDns(const uint8_t *eth, const uint8_t *end) {
   const uint8_t *iph = eth + 14;
-  if (isVideoIp(rdIp(iph + 16))) {
-    return true;  // a stream that started before the block
-  }
   uint8_t proto = iph[9];
   if (proto != 6 && proto != 17) {
     return false;
@@ -293,10 +295,25 @@ static bool ytIntercept(const uint8_t *eth, const uint8_t *end) {
   if (dport == 853) {
     return true;  // DNS-over-TLS (Android Private DNS)
   }
-  if (dport == 443 && isDohResolver(iph + 16)) {
-    return true;  // DNS-over-HTTPS / QUIC to a public resolver
+  return dport == 443 && isDohResolver(iph + 16);  // DNS-over-HTTPS / QUIC
+}
+
+// Client -> uplink packet from a device under a YouTube block. True when it
+// must not be forwarded (dropped, or answered here in place of the resolver).
+static bool ytIntercept(const uint8_t *eth, const uint8_t *end) {
+  const uint8_t *iph = eth + 14;
+  if (isVideoIp(rdIp(iph + 16))) {
+    return true;  // a stream that started before the block
   }
-  if (proto != 17 || dport != 53) {
+  if (iph[9] != 17) {
+    return false;
+  }
+  const uint8_t *l4 = l4Header(iph, end);
+  if (l4 == nullptr) {
+    return false;
+  }
+  uint16_t dport = ((uint16_t)l4[2] << 8) | l4[3];
+  if (dport != 53) {
     return false;
   }
   const uint8_t *dns = l4 + 8;
@@ -382,7 +399,7 @@ static err_t apInputHook(struct pbuf *p, struct netif *inp) {
             pbuf_free(p);
             return ERR_OK;
           }
-        } else if (s_blocked[idx] || (s_ytBlock[idx] && ytIntercept(d, d + p->len))) {
+        } else if (s_blocked[idx] || isEncryptedDns(d, d + p->len) || (s_ytBlock[idx] && ytIntercept(d, d + p->len))) {
           pbuf_free(p);
           return ERR_OK;
         } else {

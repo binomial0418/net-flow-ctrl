@@ -204,7 +204,7 @@ flowchart TD
 
 * **僅供顯示**，不影響任何限制；與總時數同時在每日重置歸零、一起存入 NVS。
 * 影片、Shorts、廣告、首頁自動預覽都會計入；只滑首頁看縮圖則因流量太小不計。
-* ESP32 必須看得到裝置的 DNS 回應才能認出影片伺服器。裝置若使用加密 DNS（DoT / DoH），將**計不到**（此時顯示為 0 或偏低）。一般電視盒走家用路由器的 DNS，不受影響。
+* ESP32 必須看得到裝置的 DNS 回應才能認出影片伺服器，所以所有裝置的加密 DNS 都會被擋下、退回一般 DNS（見「YouTube 封鎖」）。已在 Google TV 實測：YouTube 流量約 98% 被正確辨識，切到其他影音 App（Hami Video）後 YouTube 時數停止累加、總時數照常累加。
 * ESP32 在影片播放中途重開時，要等裝置重新查詢 DNS（通常幾分鐘內）才會開始計時。
 
 門檻在設定頁以「**KB/分**」設定（因視窗剛好 60 秒，數值即為每分鐘門檻）。此判定完全用執行期的位元組計數，不需時鐘。
@@ -235,7 +235,7 @@ flowchart TD
 YouTube 的前端與 Google 其他服務共用 IP，無法用 IP 擋，所以改用**網域名稱**判斷，全部在既有的封包過濾層完成：
 
 1. **DNS 攔截**：查詢 `youtube.com`、`youtu.be`、`googlevideo.com`、`ytimg.com`、`youtubekids.com`、`youtubei.googleapis.com` 等網域（含子網域）時，ESP32 直接代替 DNS 伺服器回覆 **NXDOMAIN**，App 立即失敗而不是卡在逾時重試。
-2. **堵住加密 DNS 繞道**：丟棄 DoT（埠 853，Android「私人 DNS」）與連往知名公共解析器（8.8.8.8、1.1.1.1、9.9.9.9 等）的 443 埠，讓裝置退回一般 DNS。
+2. **堵住加密 DNS 繞道**：對**所有裝置**一律丟棄 DoT（埠 853，Android「私人 DNS」）與連往知名公共解析器（8.8.8.8、1.1.1.1、9.9.9.9、Chrome 用的 Cloudflare 等）的 443 埠，讓裝置退回一般 DNS。Android 與 Chrome 遇到加密 DNS 不通都會自動退回，上網不受影響。這一步是必要的：實測 Google TV 會把影片伺服器的查詢以加密方式送到 8.8.8.8，不擋就完全看不到。
 3. **切斷播放中的影片**：ESP32 會從流經的 DNS 回應記下 `googlevideo.com`（影片 CDN）的 IP（最近 64 個），封鎖生效後連往這些 IP 的封包一律丟棄。所以時數用盡那一刻，正在播的影片也會停，不會靠既有連線繼續看。
 
 **限制**：
@@ -414,6 +414,7 @@ arduino-cli compile -b esp32:esp32:esp32:UploadSpeed=115200 --upload -p /dev/cu.
 * 刪除裝置後若該裝置仍連著，下一秒會以預設值重新出現（等同「還原為預設」）。
 * 掃描 WiFi 期間會短暫影響熱點連線（單一射頻硬體限制）。
 * **流量統計僅供顯示**，不作為限制條件（計時用的是活躍視窗，另一套邏輯）。
-* **YouTube 觀看時數僅供顯示**，且裝置使用加密 DNS 時計不到。
+* **YouTube 觀看時數僅供顯示**。
+* **所有裝置的加密 DNS（DoT / 知名 DoH）都會被擋下**，以維持 YouTube 辨識；自帶非知名 DoH 伺服器的 App 仍可繞過。
 * `netflow.local`（mDNS）僅在同一區網有效；VPN 遠端需用 IP + subnet router。
 * **YouTube 封鎖以 DNS 為基礎**，VPN 或 App 自帶 DoH 可繞過（詳見「YouTube 封鎖」）。
