@@ -28,7 +28,7 @@ void nfcStoreLoadCfg() {
     nfcStoreSaveCfg();
   } else {
     strlcpy(g_cfg.apSsid, "NetFlowCtrl", sizeof(g_cfg.apSsid));
-    strlcpy(g_cfg.apPass, "`12345678", sizeof(g_cfg.apPass));
+    strlcpy(g_cfg.apPass, "12345678", sizeof(g_cfg.apPass));
     strlcpy(g_cfg.tz, "CST-8", sizeof(g_cfg.tz));
     strlcpy(g_cfg.ntp, "pool.ntp.org", sizeof(g_cfg.ntp));
     g_cfg.resetMin = 5 * 60; // 05:00
