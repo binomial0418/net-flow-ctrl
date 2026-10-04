@@ -395,7 +395,7 @@ arduino-cli compile -b esp32:esp32:esp32:UploadSpeed=115200 --upload -p /dev/cu.
 | 端點 | 方法 | 用途 |
 |---|---|---|
 | `/` | GET | 設定頁 |
-| `/api/status` | GET | 連線狀態、時間、線上裝置數 |
+| `/api/status` | GET | 連線狀態、時間、線上裝置數；健康狀態 `uptimeSec`、`heap`、`minHeap`、`maxBlock`、`bootWhy`（上次重啟原因：`daily`／`low_heap`／`task_wdt`／`panic`／`power_on`…） |
 | `/api/devices` | GET | 裝置清單與規則 |
 | `/api/device` | POST | 更新／刪除單一裝置規則 |
 | `/api/global` | POST | 更新全域設定 |

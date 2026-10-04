@@ -24,6 +24,20 @@
 #define NFC_ACTIVE_WINDOW_SEC   60
 #define NFC_ACTIVE_KBMIN_DEFAULT 200
 
+// Self-healing. The box has been seen to wedge after about a day of uptime --
+// AP still beaconing, but nothing on either side answers IP -- and only a power
+// cycle brought it back. Until the cause is pinned down, three nets:
+//   * a daily restart in the dead of night, to clear whatever slowly piles up;
+//   * a restart when free heap stays below a floor, should it pile up faster;
+//   * the task watchdog on loop(), should the main loop itself get stuck.
+// Rules, usage and extensions all live in NVS (usage is flushed just before a
+// planned restart), so a restart costs the clients a few seconds of WiFi only.
+#define NFC_DAILY_REBOOT_MIN     (1 * 60)               // 01:00 local time
+#define NFC_REBOOT_MIN_UPTIME_MS (2UL * 60 * 60 * 1000)  // never twice in that minute
+#define NFC_HEAP_FLOOR_BYTES     20000
+#define NFC_HEAP_FLOOR_SEC       10   // consecutive seconds below the floor
+#define NFC_LOOP_WDT_SEC         30
+
 // Persisted per-device rule. usedSec/usedBytes ride along so a reboot does not
 // hand back a fresh quota. Keep new fields at the end: the loader migrates an
 // older, shorter record by filling only what it stored and zeroing the rest
@@ -157,3 +171,4 @@ void nfcStaConnect();     // (re)connect the uplink using g_cfg
 void nfcApplyTimeCfg();   // re-arm NTP/TZ after a config change
 void nfcResetUsage();     // zero today's counters for every device
 void nfcSyncFilter();     // re-evaluate every rule and push it to the filter
+const char *nfcRebootWhy();  // why the box last restarted, for /api/status

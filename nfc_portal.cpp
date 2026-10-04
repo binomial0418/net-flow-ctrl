@@ -67,6 +67,13 @@ static void handleStatus() {
   }
   doc["online"] = online;
 
+  // Health, to tell a slow leak from a one-off hang (see NFC_HEAP_FLOOR_BYTES).
+  doc["uptimeSec"] = millis() / 1000;
+  doc["heap"] = ESP.getFreeHeap();
+  doc["minHeap"] = ESP.getMinFreeHeap();
+  doc["maxBlock"] = ESP.getMaxAllocHeap();
+  doc["bootWhy"] = nfcRebootWhy();
+
   String out;
   serializeJson(doc, out);
   s_srv.send(200, "application/json", out);
