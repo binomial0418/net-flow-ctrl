@@ -84,6 +84,7 @@ struct GlobalCfg {
   // Keep new fields at the end: the loader migrates a shorter, older blob by
   // filling only what it stored and defaulting the rest (see nfcStoreLoadCfg).
   uint16_t activeKBmin;   // usage-time traffic threshold, KB per minute
+  bool     blockEncDns;   // refuse DoT/DoH so YouTube lookups stay visible
 };
 
 // Reason a device is currently cut off from the uplink.
@@ -154,6 +155,7 @@ void nfcFilterRemove(int idx);
 void nfcFilterSetBlocked(int idx, bool blocked);
 void nfcFilterSetYoutubeBlocked(int idx, bool blocked);
 void nfcFilterSetDefaultAllow(bool allow);
+void nfcFilterSetBlockEncDns(bool block);
 uint32_t nfcFilterIp(int idx);  // last source IP seen from this MAC, 0 = unknown
 uint32_t nfcFilterUpBytes(int idx);
 uint32_t nfcFilterDownBytes(int idx);

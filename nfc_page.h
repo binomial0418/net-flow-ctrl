@@ -77,6 +77,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <div><label>NTP 伺服器</label><input id="ntp" placeholder="pool.ntp.org"></div>
     <div><label>未知新裝置</label><select id="defAllow"><option value="1">預設允許連外</option><option value="0">預設封鎖連外</option></select></div>
     <div><label>計時流量門檻（KB/分）</label><input id="actKB" type="number" min="1" max="60000"><div class="hint">每分鐘流量達此值才累計使用時數，低於則視為閒置</div></div>
+    <div><label>加密 DNS（DoT / DoH）</label><select id="encDns"><option value="1">封鎖（辨識 YouTube 需要）</option><option value="0">放行</option></select><div class="hint">放行時，使用加密 DNS 的裝置（如 Google TV）將無法辨識 YouTube</div></div>
   </div>
   <div class="row"><button id="saveG">儲存並套用</button><span class="hint">變更對外 WiFi 會重新連線，AP 熱點不中斷</span></div>
 </div>
@@ -156,7 +157,7 @@ async function loadStatus(){
   if(!$('staSsid').dataset.t){
     $('staSsid').value=s.staSsid;$('resetAt').value=hhmm(s.resetMin);
     $('tz').value=s.tz;$('ntp').value=s.ntp;$('defAllow').value=s.defaultAllow?'1':'0';
-    $('actKB').value=s.activeKBmin;
+    $('actKB').value=s.activeKBmin;$('encDns').value=s.blockEncDns?'1':'0';
     $('staSsid').dataset.t=1;
   }
 }
@@ -231,7 +232,7 @@ $('eClear').onclick=async()=>{
 $('saveG').onclick=async()=>{
   const r=await jpost('/api/global',{staSsid:$('staSsid').value,staPass:$('staPass').value,
     resetMin:toMin($('resetAt').value),tz:$('tz').value,ntp:$('ntp').value,defaultAllow:$('defAllow').value==='1',
-    activeKBmin:+$('actKB').value});
+    activeKBmin:+$('actKB').value,blockEncDns:$('encDns').value==='1'});
   if(r){toast('已套用');$('staPass').value=''}
 };
 $('scanBtn').onclick=async()=>{

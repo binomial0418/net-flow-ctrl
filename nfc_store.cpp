@@ -15,8 +15,9 @@ void nfcStoreBegin() { s_prefs.begin("netflow", false); }
 
 void nfcStoreLoadCfg() {
   memset(&g_cfg, 0, sizeof(g_cfg));
-  g_cfg.activeKBmin =
-      NFC_ACTIVE_KBMIN_DEFAULT; // default before any load fills it
+  // Defaults before any load fills them.
+  g_cfg.activeKBmin = NFC_ACTIVE_KBMIN_DEFAULT;
+  g_cfg.blockEncDns = true;
   size_t n = s_prefs.getBytesLength("cfg");
   if (n == sizeof(GlobalCfg)) {
     s_prefs.getBytes("cfg", &g_cfg, sizeof(GlobalCfg));

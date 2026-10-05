@@ -48,6 +48,7 @@ static void handleStatus() {
   doc["ntp"] = g_cfg.ntp;
   doc["defaultAllow"] = g_cfg.defaultAllow;
   doc["activeKBmin"] = g_cfg.activeKBmin;
+  doc["blockEncDns"] = g_cfg.blockEncDns;
   doc["timeValid"] = g_timeValid;
 
   char ts[32] = "";
@@ -213,6 +214,8 @@ static void handleGlobal() {
   nfcFilterSetDefaultAllow(g_cfg.defaultAllow);
   int kb = doc["activeKBmin"] | (int)g_cfg.activeKBmin;
   g_cfg.activeKBmin = (uint16_t)constrain(kb, 1, 60000);
+  g_cfg.blockEncDns = doc["blockEncDns"] | g_cfg.blockEncDns;
+  nfcFilterSetBlockEncDns(g_cfg.blockEncDns);
   nfcStoreSaveCfg();
 
   // Answer before touching the radio: reassociating drops this very socket.

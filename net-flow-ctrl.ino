@@ -340,6 +340,7 @@ void setup() {
   nfcStoreLoadCfg();
   nfcStoreLoadDevices();
   nfcFilterSetDefaultAllow(g_cfg.defaultAllow);
+  nfcFilterSetBlockEncDns(g_cfg.blockEncDns);
   // Republish the rules restored from NVS before the radio comes up, so a
   // device that was blocked yesterday is still blocked on its first packet.
   for (int i = 0; i < NFC_MAX_DEVICES; i++) {
