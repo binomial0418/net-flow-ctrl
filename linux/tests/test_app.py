@@ -20,12 +20,16 @@ class FakeNft:
     def __init__(self):
         self.bytes = {"acct_up": {}, "acct_down": {}, "acct_yt_up": {}, "acct_yt_down": {}}
         self.policy = None
+        self.video = None  # pairs last pushed by the periodic resync
 
     def counters(self):
         return {s: dict(v) for s, v in self.bytes.items()}
 
     def apply_policy(self, p):
         self.policy = p
+
+    def sync_video(self, pairs):
+        self.video = sorted(pairs)
 
     def add(self, s, ip, n):
         self.bytes[s][ip] = self.bytes[s].get(ip, 0) + n
@@ -395,6 +399,46 @@ class Reminders(unittest.TestCase):
         with self.assertRaises(ApiError) as e:
             self.h.ctl.notify_test({"mac": TV})
         self.assertEqual(e.exception.status, 409)
+
+
+class VideoPairs(unittest.TestCase):
+    """Learned video addresses survive a restart and a ruleset reload."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.h = Harness(Path(self._tmp.name))
+        self.h.tick()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_only_new_pairs_go_in_at_once(self):
+        ctl = self.h.ctl
+        self.assertEqual(ctl.learn_video(TV_IP, [("1.1.1.1", 300), ("2.2.2.2", 300)]), [(TV_IP, "1.1.1.1"), (TV_IP, "2.2.2.2")])
+        self.assertEqual(ctl.learn_video(TV_IP, [("1.1.1.1", 300)]), [])  # known: resync keeps it
+        self.assertEqual(ctl.learn_video("192.168.50.150", [("1.1.1.1", 300)]), [("192.168.50.150", "1.1.1.1")])
+
+    def test_restored_after_restart(self):
+        self.h.ctl.learn_video(TV_IP, [("210.242.128.143", 300)])
+        self.h.ctl.save()
+        self.h.ctl = self.h.make()  # the daemon restarts; nftables has lost the set
+        self.h.tick()  # the first tick re-inserts the saved pairs
+        self.assertEqual(self.h.nft.video, [(TV_IP, "210.242.128.143")])
+
+    def test_resynced_periodically(self):
+        self.h.ctl.learn_video(TV_IP, [("1.1.1.1", 300)])
+        self.h.ctl._last_video_sync -= self.h.conf.video_resync_sec  # a minute has gone by
+        self.h.nft.video = None
+        self.h.tick()
+        self.assertEqual(self.h.nft.video, [(TV_IP, "1.1.1.1")])
+
+    def test_forgotten_after_the_keep_window(self):
+        ctl = self.h.ctl
+        ctl.learn_video(TV_IP, [("1.1.1.1", 300), ("2.2.2.2", 300)])
+        ctl.st.video_pairs[(TV_IP, "1.1.1.1")] -= self.h.conf.video_keep_sec + 1
+        ctl._resync_video()
+        self.assertEqual(self.h.nft.video, [(TV_IP, "2.2.2.2")])
+        self.assertNotIn((TV_IP, "1.1.1.1"), ctl.st.video_pairs)
 
 
 class Deltas(unittest.TestCase):

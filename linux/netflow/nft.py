@@ -107,6 +107,10 @@ class Nft:
             return {name: {} for name in ACCT_SETS}
         return parse_counters(json.loads(r.stdout))
 
+    def sync_video(self, pairs: Iterable[Tuple[str, str]]) -> None:
+        """(Re)insert pairs from the main loop, refreshing their timeout."""
+        self._run(video_script(pairs))
+
     async def add_video(self, pairs: Iterable[Tuple[str, str]]) -> None:
         proc = await asyncio.create_subprocess_exec(
             NFT, "-f", "-", stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE

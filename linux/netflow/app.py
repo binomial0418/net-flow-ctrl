@@ -20,6 +20,7 @@ from .notifier import Notice
 log = logging.getLogger(__name__)
 
 USAGE_SAVE_SEC = 60  # periodic checkpoint of the usage counters
+MAX_VIDEO_PAIRS = 4096  # learned (client, video address) pairs kept at most
 ONLINE_GRACE_SEC = 120  # recent traffic keeps a device "online" past its neighbour entry
 
 # YouTube recognition health. Recognition hangs on seeing the DNS lookups; a
@@ -61,6 +62,10 @@ class Conf:
     health_max_yt_share: float = 0.05
     health_raise_sec: int = 120
     health_clear_sec: int = 300
+    # Learned video addresses are kept this long after their last lookup and
+    # re-inserted into nftables every video_resync_sec meanwhile.
+    video_keep_sec: int = 24 * 3600
+    video_resync_sec: int = 60
     # Reminders through TvOverlay on the devices (notifier.py).
     tvoverlay_port: int = 5001
     notify_duration_s: int = 20
@@ -178,6 +183,7 @@ class Controller:
         self.time_valid = False
         self.started = time.monotonic()
         self._last_save = time.monotonic()
+        self._last_video_sync = 0.0  # 0: restore the saved pairs on the first tick
         self.outbox: List[Notice] = []  # reminders for the main loop to deliver
 
     # ------------------------------------------------------------- helpers --
@@ -225,6 +231,8 @@ class Controller:
         self._collect_and_accrue()
         self.sync()  # after accruing, so a device that just ran out is cut this tick
         self._check_notices(now)
+        if time.monotonic() - self._last_video_sync >= self.conf.video_resync_sec or not self._last_video_sync:
+            self._resync_video()
         if time.monotonic() - self._last_save >= USAGE_SAVE_SEC:
             self.save()
 
@@ -360,6 +368,38 @@ class Controller:
         # counting would hand back an allowance, so checkpoint it at once.
         if quota_hit:
             self.save()
+
+    # ------------------------------------------------------- video addresses --
+
+    def learn_video(self, client_ip: str, addrs: List[Tuple[str, int]]) -> List[Tuple[str, str]]:
+        """Record video addresses a client just looked up; returns the pairs
+        that are new and must go into nftables before the client sees the
+        answer. Known pairs only have their lookup time refreshed: the
+        periodic resync keeps them in the ruleset."""
+        now = time.time()
+        fresh = []
+        for ip, _ttl in addrs:
+            k = (client_ip, ip)
+            if k not in self.st.video_pairs:
+                fresh.append(k)
+            self.st.video_pairs[k] = now
+        return fresh
+
+    def _resync_video(self) -> None:
+        """Re-insert every pair looked up within video_keep_sec. A reload of
+        nftables.service or a restart empties the kernel set, and the YouTube
+        app keeps streaming from addresses it resolved before -- without this
+        that video would go unrecognised (no timing, no YouTube cut)."""
+        self._last_video_sync = time.monotonic()
+        cutoff = time.time() - self.conf.video_keep_sec
+        pairs = self.st.video_pairs
+        for k in [k for k, t in pairs.items() if t < cutoff]:
+            del pairs[k]
+        if len(pairs) > MAX_VIDEO_PAIRS:  # keep the most recently looked up
+            for k, _ in sorted(pairs.items(), key=lambda kv: kv[1])[: len(pairs) - MAX_VIDEO_PAIRS]:
+                del pairs[k]
+        if pairs:
+            self.nft.sync_video(list(pairs))
 
     # ----------------------------------------------------------- reminders --
 

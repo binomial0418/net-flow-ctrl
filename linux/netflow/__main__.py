@@ -7,7 +7,7 @@ import logging
 import signal
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 from . import portal
 from .app import Conf, Controller
@@ -17,12 +17,6 @@ from .notifier import Notifier
 
 log = logging.getLogger("netflow")
 
-# Re-insert a learned (client, address) pair at most this often. Well inside the
-# ytvideo set's timeout (deploy/nftables.conf), so a lookup always renews a pair
-# before it could lapse; traffic on the pair renews it in between.
-VIDEO_READD_SEC = 600
-
-
 async def main(conf: Conf) -> None:
     nft = Nft()
     ctl = Controller(conf, nft)
@@ -31,18 +25,10 @@ async def main(conf: Conf) -> None:
     # blocked before the restart is still blocked on its first packet.
     ctl.sync()
 
-    added: Dict[Tuple[str, str], float] = {}
-
     async def on_video(client_ip: str, addrs: List[Tuple[str, int]]) -> None:
-        now = time.monotonic()
-        fresh = [(client_ip, ip) for ip, _ttl in addrs if now - added.get((client_ip, ip), -VIDEO_READD_SEC) >= VIDEO_READD_SEC]
+        fresh = ctl.learn_video(client_ip, addrs)
         if fresh:
             await nft.add_video(fresh)
-            if len(added) > 4096:  # forget pairs that are due a re-insert anyway
-                for k in [k for k, t in added.items() if now - t >= VIDEO_READD_SEC]:
-                    del added[k]
-            for k in fresh:
-                added[k] = now
 
     proxy = DnsProxy(
         conf.upstream_dns,

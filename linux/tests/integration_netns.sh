@@ -14,6 +14,7 @@ pids=()
 cleanup() {
 	for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done
 	wait 2>/dev/null
+	pkill -f "[n]etflow --config $T/conf.json" 2>/dev/null  # belt and braces ([n]: never matches pkill itself)
 	for n in nf-wan nf-rtr nf-tv; do ip netns del $n 2>/dev/null; done
 }
 trap cleanup EXIT
@@ -46,7 +47,9 @@ ip netns exec nf-wan python3 tests/fakenet.py serve & pids+=($!)
 cat > $T/conf.json <<EOF
 {"upstream_dns": ["8.8.8.8"], "state_path": "$T/state.json", "leases_path": "$T/none"}
 EOF
-rtr env PYTHONPATH=. python3 -m netflow --config $T/conf.json >$T/daemon.log 2>&1 & pids+=($!)
+# Started directly, not through rtr(): backgrounding a shell function puts a
+# subshell in $!, and killing that would leave the daemon running.
+ip netns exec nf-rtr env PYTHONPATH=. python3 -m netflow --config $T/conf.json >$T/daemon.log 2>&1 & pids+=($!)
 sleep 2
 
 echo "boot (fail-closed until registered)"
@@ -106,6 +109,14 @@ check "portal still reachable" "*timeValid*" "$(tv api GET /api/status)"
 echo "shutdown saves state"
 kill -TERM "${pids[1]}"; sleep 2
 check "state saved" "*manual_block\": true*" "$(tr -d '\n' < $T/state.json)"
+
+echo "learned video addresses survive a ruleset reload and a restart"
+rtr nft -f deploy/nftables.conf  # what a reload of nftables.service does: every set emptied
+check "set emptied by the reload" "*timeout 1h	}}" "$(rtr nft list set inet netflow ytvideo | tr -d '\n')"
+ip netns exec nf-rtr env PYTHONPATH=. python3 -m netflow --config $T/conf.json >>$T/daemon.log 2>&1 & pids+=($!)
+sleep 3
+check "restored from state" "*192.168.50.101 . 173.194.9.9*192.168.50.101 . 173.194.9.10*" "$(rtr nft list set inet netflow ytvideo | tr -d '\n')"
+kill -TERM "${pids[-1]}"; sleep 2
 
 echo
 echo "passed $PASS, failed $FAIL"

@@ -8,7 +8,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 # Usage time accrues only while a device is actually moving data: a second
 # counts when the trailing ACTIVE_WINDOW_SEC of traffic reaches the threshold.
@@ -76,6 +76,11 @@ class State:
     cfg: GlobalCfg = field(default_factory=GlobalCfg)
     devices: Dict[str, DeviceRule] = field(default_factory=dict)  # keyed by mac
     day_key: int = 0  # logical day the counters belong to
+    # Learned (client ip, video address) -> wall-clock time of its last
+    # lookup. Kept here, not only in nftables, so a restart or a ruleset
+    # reload does not forget them: the YouTube app goes on using an address
+    # it resolved earlier without asking DNS again (see Controller._resync_video).
+    video_pairs: Dict[Tuple[str, str], float] = field(default_factory=dict)
 
 
 def _from_dict(cls, data: Dict[str, Any]):
@@ -90,6 +95,7 @@ def state_to_dict(st: State) -> Dict[str, Any]:
         "cfg": dataclasses.asdict(st.cfg),
         "devices": [dataclasses.asdict(d) for d in st.devices.values()],
         "day_key": st.day_key,
+        "video_pairs": [[c, v, t] for (c, v), t in st.video_pairs.items()],
     }
 
 
@@ -99,4 +105,7 @@ def state_from_dict(data: Dict[str, Any]) -> State:
         if "mac" in d:
             dev = _from_dict(DeviceRule, d)
             st.devices[dev.mac] = dev
+    for p in data.get("video_pairs", []):
+        if isinstance(p, list) and len(p) == 3:
+            st.video_pairs[(str(p[0]), str(p[1]))] = float(p[2])
     return st

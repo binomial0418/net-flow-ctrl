@@ -21,6 +21,11 @@ install -m 0644 netflow/*.py netflow/page.html /opt/netflow/netflow/
 [ -f /etc/netflow/netflow.json ] || echo '{}' > /etc/netflow/netflow.json
 
 nft -c -f deploy/nftables.conf
+# Reload the ruleset only when it changed: a reload empties every set, and
+# while the daemon refills them (policy at once, learned video addresses
+# within a minute) there is no reason to disturb a running network.
+ruleset_changed=0
+cmp -s deploy/nftables.conf /etc/nftables.conf || ruleset_changed=1
 install -m 0644 deploy/nftables.conf /etc/nftables.conf
 install -m 0644 deploy/dnsmasq-netflow.conf /etc/dnsmasq.d/netflow.conf
 dnsmasq --test
@@ -36,7 +41,7 @@ if [ "${1:-}" = "--activate" ]; then
 	systemctl restart dnsmasq netflow
 	echo "activated: TV network live on ens19"
 elif systemctl is-active -q netflow; then
-	systemctl reload-or-restart nftables
+	[ $ruleset_changed -eq 0 ] || systemctl reload-or-restart nftables
 	systemctl restart netflow
 	echo "updated and restarted"
 else
