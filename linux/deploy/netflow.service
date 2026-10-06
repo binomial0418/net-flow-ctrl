@@ -1,0 +1,17 @@
+[Unit]
+Description=net-flow-ctrl: per-device uplink limits for the TV network
+# The ruleset must be in place before the daemon starts rewriting its sets.
+Requires=nftables.service
+After=nftables.service network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -m netflow --config /etc/netflow/netflow.json
+WorkingDirectory=/opt/netflow
+Restart=always
+RestartSec=2
+# A stop saves the state; give it a moment.
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
