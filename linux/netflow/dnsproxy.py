@@ -17,8 +17,11 @@ log = logging.getLogger(__name__)
 UPSTREAM_TIMEOUT = 2.5
 
 IsBlocked = Callable[[str], bool]  # client ip -> under a YouTube block?
-OnVideo = Callable[[List[Tuple[str, int]]], Awaitable[None]]
+# (client ip, [(video ip, ttl)]): learned per client, so one device's lookup
+# does not mark that address as YouTube for every other device.
+OnVideo = Callable[[str, List[Tuple[str, int]]], Awaitable[None]]
 OnQuery = Callable[[str, str], None]  # (client ip, name) for every query seen
+EncDnsBlocked = Callable[[], bool]  # refuse lookups of encrypted-DNS resolvers?
 
 
 class _OneShot(asyncio.DatagramProtocol):
@@ -44,6 +47,8 @@ class DnsProxy:
         on_query: Optional[OnQuery] = None,
         youtube_domains: Sequence[str] = dnsmsg.YOUTUBE_DOMAINS,
         video_domains: Sequence[str] = dnsmsg.VIDEO_DOMAINS,
+        enc_dns_blocked: EncDnsBlocked = lambda: False,
+        enc_dns_domains: Sequence[str] = dnsmsg.ENC_DNS_DOMAINS,
     ) -> None:
         self.upstreams = list(upstreams)
         self.is_blocked = is_blocked
@@ -51,20 +56,35 @@ class DnsProxy:
         self.on_query = on_query
         self.youtube_domains = tuple(youtube_domains)
         self.video_domains = tuple(video_domains)
+        self.enc_dns_blocked = enc_dns_blocked
+        self.enc_dns_domains = tuple(enc_dns_domains)
 
     async def answer(self, query: bytes, client_ip: str, tcp: bool = False) -> Optional[bytes]:
-        q = dnsmsg.question(query) if dnsmsg.is_query(query) else None
-        if q and self.on_query:
+        if not dnsmsg.is_query(query):
+            return None
+        q = dnsmsg.question(query) if dnsmsg.qdcount(query) == 1 else None
+        if q is None:
+            # Unreadable here, so it could be a YouTube name in disguise (a
+            # compressed or second question). Fail closed for a device under
+            # a YouTube block; anyone else is forwarded as before.
+            if self.is_blocked(client_ip):
+                return dnsmsg.formerr(query)
+        elif self.on_query:
             self.on_query(client_ip, q[0])
+        if q and self.enc_dns_blocked() and dnsmsg.matches(q[0], self.enc_dns_domains):
+            return dnsmsg.nxdomain(query)
         if q and dnsmsg.is_youtube_name(q[0], self.youtube_domains) and self.is_blocked(client_ip):
             return dnsmsg.nxdomain(query)
         resp = await (self._forward_tcp(query) if tcp else self._forward_udp(query))
         if resp:
+            # A name outside the lists that CNAMEs into YouTube is YouTube too.
+            if q and dnsmsg.chain_matches(resp, self.youtube_domains) and self.is_blocked(client_ip):
+                return dnsmsg.nxdomain(query)
             vids = dnsmsg.video_addresses(resp, self.video_domains)
             if vids:
                 # Before the client sees the answer: its first packet to the
                 # video host must already be recognised.
-                await self.on_video(vids)
+                await self.on_video(client_ip, vids)
         return resp
 
     async def _forward_udp(self, query: bytes) -> Optional[bytes]:

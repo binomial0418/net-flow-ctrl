@@ -24,15 +24,13 @@ ONLINE_GRACE_SEC = 120  # recent traffic keeps a device "online" past its neighb
 # client that finds a way around them (a new encrypted-DNS endpoint, say) would
 # silently escape both timing and blocking. The tell: the YouTube app is in
 # use and plenty of data is moving, yet almost none of it is recognised video.
-# Judged over a trailing HEALTH_WINDOW_SEC, raised only once that has held for
-# HEALTH_RAISE_SEC, and cleared after HEALTH_CLEAR_SEC without it, so a brief
+# Judged over a trailing health_window_sec, raised only once that has held for
+# health_raise_sec, and cleared after health_clear_sec without it, so a brief
 # overlap (the app opened, then another streaming app) does not flash a warning.
-HEALTH_WINDOW_SEC = 300
-HEALTH_MIN_BYTES = 20 * 1024 * 1024
-HEALTH_MIN_APP_LOOKUPS = 2
-HEALTH_MAX_YT_SHARE = 0.05
-HEALTH_RAISE_SEC = 120
-HEALTH_CLEAR_SEC = 300
+# The thresholds live in Conf so they can be tuned from netflow.json.
+
+# Conf fields holding domain lists, normalised on load.
+DOMAIN_LISTS = ("youtube_domains", "video_domains", "youtube_app_domains", "enc_dns_domains")
 
 
 @dataclass
@@ -44,12 +42,23 @@ class Conf:
     upstream_dns: List[str] = field(default_factory=lambda: ["8.8.8.8", "1.1.1.1", "168.95.192.1"])
     state_path: str = "/var/lib/netflow/state.json"
     leases_path: str = "/var/lib/misc/dnsmasq.leases"
-    video_timeout_s: int = 6 * 3600
     max_devices: int = 64
     # Should YouTube move, these can be overridden without touching the code.
     youtube_domains: List[str] = field(default_factory=lambda: list(dnsmsg.YOUTUBE_DOMAINS))
     video_domains: List[str] = field(default_factory=lambda: list(dnsmsg.VIDEO_DOMAINS))
     youtube_app_domains: List[str] = field(default_factory=lambda: list(dnsmsg.YOUTUBE_APP_DOMAINS))
+    # Answered NXDOMAIN while the "block encrypted DNS" setting is on.
+    enc_dns_domains: List[str] = field(default_factory=lambda: list(dnsmsg.ENC_DNS_DOMAINS))
+    # Log every lookup (client, name): for checking which names a device's
+    # YouTube app really uses. Noisy; leave off in normal use.
+    log_queries: bool = False
+    # Recognition health (see the comment above).
+    health_window_sec: int = 300
+    health_min_mb: int = 20
+    health_min_app_lookups: int = 2
+    health_max_yt_share: float = 0.05
+    health_raise_sec: int = 120
+    health_clear_sec: int = 300
 
     @classmethod
     def load(cls, path: Path) -> "Conf":
@@ -58,7 +67,11 @@ class Conf:
         except FileNotFoundError:
             return cls()
         names = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in names})
+        conf = cls(**{k: v for k, v in data.items() if k in names})
+        for k in DOMAIN_LISTS:
+            # "YouTube.com." in the file still matches youtube.com.
+            setattr(conf, k, [d for d in map(dnsmsg.norm_domain, getattr(conf, k)) if d])
+        return conf
 
 
 class ApiError(Exception):
@@ -77,9 +90,9 @@ class Runtime:
     reason: Reason = Reason.ALLOWED
     act: rules.ActivityWindow = field(default_factory=rules.ActivityWindow)
     yt_act: rules.ActivityWindow = field(default_factory=rules.ActivityWindow)
-    # Recognition health (see HEALTH_*).
-    long_all: rules.ActivityWindow = field(default_factory=lambda: rules.ActivityWindow(HEALTH_WINDOW_SEC))
-    long_yt: rules.ActivityWindow = field(default_factory=lambda: rules.ActivityWindow(HEALTH_WINDOW_SEC))
+    # Recognition health (see Conf.health_*), over Conf.health_window_sec.
+    long_all: rules.ActivityWindow = field(default_factory=rules.ActivityWindow)
+    long_yt: rules.ActivityWindow = field(default_factory=rules.ActivityWindow)
     app_lookups: List[float] = field(default_factory=list)  # monotonic times
     suspect_sec: int = 0  # consecutive seconds the tell has held
     clear_sec: int = 0  # consecutive seconds it has not
@@ -148,7 +161,7 @@ class Controller:
         self._snapshot = snapshot or (lambda: clients.snapshot(conf.lan_if, Path(conf.leases_path)))
         self._uplink = uplink or (lambda: uplink_up(conf.wan_if))
         self.st = store.load(Path(conf.state_path))
-        self.rt: Dict[str, Runtime] = {mac: Runtime() for mac in self.st.devices}
+        self.rt: Dict[str, Runtime] = {mac: self._new_rt() for mac in self.st.devices}
         self.ip_to_mac: Dict[str, str] = {}
         self.deltas = CounterDeltas()
         self.uplink_up = False
@@ -162,6 +175,10 @@ class Controller:
         now = self.clock()
         return now, now.hour * 60 + now.minute
 
+    def _new_rt(self) -> Runtime:
+        w = max(1, self.conf.health_window_sec)
+        return Runtime(long_all=rules.ActivityWindow(w), long_yt=rules.ActivityWindow(w))
+
     def save(self) -> None:
         store.save(Path(self.conf.state_path), self.st)
         self._last_save = time.monotonic()
@@ -173,8 +190,13 @@ class Controller:
             return False
         return d.block_youtube or self.rt[mac].reason in YT_LIMIT
 
+    def enc_dns_blocked(self) -> bool:
+        return self.st.cfg.block_enc_dns
+
     def note_query(self, client_ip: str, name: str) -> None:
         """Called by the DNS proxy for every lookup."""
+        if self.conf.log_queries:
+            log.info("query %s %s", client_ip, name)
         if not dnsmsg.matches(name, self.conf.youtube_app_domains):
             return
         mac = self.ip_to_mac.get(client_ip)
@@ -208,7 +230,7 @@ class Controller:
                 self.st.devices[mac] = DeviceRule(
                     mac=mac, name=clients.default_name(c, mac), approved=self.st.cfg.default_allow
                 )
-                self.rt[mac] = Runtime()
+                self.rt[mac] = self._new_rt()
                 registered = True
                 log.info("registered %s (%s)", mac, c.hostname or "-")
         session_ended = False
@@ -266,13 +288,14 @@ class Controller:
     def _check_health(self, mac: str, dev: DeviceRule, rt: Runtime, total: int, yt: int, mono: float) -> None:
         rt.long_all.tick(total)
         rt.long_yt.tick(yt)
-        rt.app_lookups = [t for t in rt.app_lookups if mono - t < HEALTH_WINDOW_SEC]
+        c = self.conf
+        rt.app_lookups = [t for t in rt.app_lookups if mono - t < c.health_window_sec]
         # Under a YouTube cut there is meant to be no video traffic.
         tell = (
             not (dev.block_youtube or rt.reason in YT_LIMIT)
-            and len(rt.app_lookups) >= HEALTH_MIN_APP_LOOKUPS
-            and rt.long_all.total >= HEALTH_MIN_BYTES
-            and rt.long_yt.total < rt.long_all.total * HEALTH_MAX_YT_SHARE
+            and len(rt.app_lookups) >= c.health_min_app_lookups
+            and rt.long_all.total >= c.health_min_mb * 1024 * 1024
+            and rt.long_yt.total < rt.long_all.total * c.health_max_yt_share
         )
         if tell:
             rt.suspect_sec += 1
@@ -280,13 +303,13 @@ class Controller:
         else:
             rt.clear_sec += 1
             rt.suspect_sec = 0
-        if not rt.yt_warn and rt.suspect_sec >= HEALTH_RAISE_SEC:
+        if not rt.yt_warn and rt.suspect_sec >= c.health_raise_sec:
             rt.yt_warn = True
             log.warning(
                 "%s (%s): YouTube app in use but its video is not being recognised -- "
                 "DNS may be bypassing the proxy", dev.name, mac
             )
-        elif rt.yt_warn and rt.clear_sec >= HEALTH_CLEAR_SEC:
+        elif rt.yt_warn and rt.clear_sec >= c.health_clear_sec:
             rt.yt_warn = False
             log.info("%s (%s): YouTube recognition back to normal", dev.name, mac)
 

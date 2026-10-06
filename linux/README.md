@@ -38,25 +38,78 @@ ESP32 版（[../esp32/](../esp32/)）維持不變，作為備援。兩版的規�
 
 **IP 變動不影響**：程式沒有寫死任何 YouTube 的 IP，影片伺服器的位址都是從 DNS 回應即時學到的。
 
-**網域清單可以從設定檔修改**：YouTube 若改用新網域，在 VM 的 `/etc/netflow/netflow.json` 覆寫對應清單後重啟服務即可（`sudo systemctl restart netflow`），不用改程式。寫了就**取代**內建清單，所以要列出完整內容：
+### 辨識方式
+
+1. 所有 DNS 查詢都會被導到 VM 上的 DNS 代理。
+2. 被「封鎖 YouTube」的裝置查 YouTube 網域時，直接回 NXDOMAIN。
+3. 其他查詢轉給上游。上游的回應如果是影片網域（`googlevideo.com`），就把回應裡的 IP 記進 nftables 的 `ytvideo` 集合。
+4. 封包經過時，依目的 IP 判斷是否為 YouTube 影片：計入 YouTube 時數，或在封鎖時切斷。
+
+細節：
+
+- **依裝置記錄**：`ytvideo` 存的是「裝置 IP . 影片伺服器 IP」，只有自己查過的裝置會被判定為 YouTube。同一個 IP（例如 ISP 機房內的 Google 快取節點）也會服務 Play 商店、系統更新的下載，這樣其他裝置下載更新時不會被誤算或誤擋。
+- **有流量就續期**：每筆記錄在**沒有流量 1 小時**後過期（`nftables.conf` 的 `timeout 1h`）。影片播放期間的封包會不斷續期，長時間播放不會中途失效。
+- **跟著 CNAME 走**：查詢的名稱即使不在清單內，只要經 CNAME 指到影片網域，一樣會學到 IP；被封鎖 YouTube 的裝置也會拿到 NXDOMAIN。
+- **查不懂的查詢不放行**：被封鎖 YouTube 的裝置送出無法解析的查詢（例如一個封包裡有多個問題），直接回 FORMERR，不轉給上游。
+- **只處理 IPv4**：電視網段沒有發 IPv6（dnsmasq 沒開 RA）。萬一日後有 IPv6，`from_lan` 會一律拒絕 IPv6 轉發，裝置會改走 IPv4，不會繞過時數與封鎖。
+
+### 擋加密 DNS
+
+辨識依賴看得到 DNS 查詢，所以設定頁的「擋加密 DNS」開啟時（預設開啟），有兩層：
+
+- **依連接埠與 IP**：擋 DoT（853 埠），以及常見公共 DNS 的 IP 上的 443 埠（`nftables.conf` 的 `dohips`）。
+- **依網域**：DNS 代理對 DoH 服務的網域回 NXDOMAIN（`dns.google`、`cloudflare-dns.com`、`dns.quad9.net` 等，清單見 `enc_dns_domains`）。裝置要先查到 DoH 伺服器的位址才能使用，所以 IP 不在 `dohips` 裡的新服務也擋得到。其中 `use-application-dns.net` 是 Firefox 的偵測網域，回 NXDOMAIN 會讓 Firefox 不啟用 DoH。
+
+### 設定檔
+
+網域清單與警示門檻都可以在 VM 的 `/etc/netflow/netflow.json` 覆寫，改完重啟服務即可（`sudo systemctl restart netflow`），不用改程式。清單寫了就**取代**內建清單，所以要列出完整內容。網域大小寫、結尾的點不影響比對：
 
 ```json
 {
   "youtube_domains": ["youtube.com", "youtu.be", "googlevideo.com", "ytimg.com", "..."],
   "video_domains": ["googlevideo.com"],
-  "youtube_app_domains": ["youtubei.googleapis.com"]
+  "youtube_app_domains": ["youtubei.googleapis.com", "www.youtube.com", "m.youtube.com"],
+  "enc_dns_domains": ["dns.google", "cloudflare-dns.com", "..."]
 }
 ```
 
-| 清單 | 用途 |
+| 設定 | 用途 |
 |---|---|
 | `youtube_domains` | 「封鎖 YouTube」時回 NXDOMAIN 的網域 |
 | `video_domains` | 影片伺服器：學習其 IP，用來計算 YouTube 時數、切斷播放中的影片 |
-| `youtube_app_domains` | YouTube App 的 API，用來判斷 App 正在使用（辨識失效警示） |
+| `youtube_app_domains` | 判斷 YouTube 正在使用的網域（辨識失效警示）。手機 App 查 `youtubei.googleapis.com`，電視 App 與瀏覽器查 `www.youtube.com` / `m.youtube.com` |
+| `enc_dns_domains` | 「擋加密 DNS」開啟時回 NXDOMAIN 的 DoH／DoT 網域 |
+| `log_queries` | `true` 時把每筆 DNS 查詢（裝置 IP、網域）寫進系統日誌，用來確認裝置實際查了哪些網域。預設 `false`，平常不要開 |
+| `health_*` | 辨識失效警示的門檻，見下節 |
 
-內建預設值見 [netflow/dnsmsg.py](netflow/dnsmsg.py)。
+內建預設值見 [netflow/dnsmsg.py](netflow/dnsmsg.py) 與 [netflow/app.py](netflow/app.py) 的 `Conf`。
 
-**辨識失效警示**：辨識依賴看得到 DNS 查詢。如果裝置找到繞過的方式（例如新的加密 DNS 伺服器），時數和封鎖會無聲失效。所以系統會偵測這個特徵：最近 5 分鐘內有查詢 YouTube App 的 API、總流量至少 20 MB，但被辨識為 YouTube 影片的流量不到 5%。持續 2 分鐘就在設定頁顯示「⚠️ YouTube 辨識可能失效」，也會寫入系統日誌（`journalctl -u netflow`）；恢復正常 5 分鐘後警示自動消失。被封鎖 YouTube 的裝置不會觸發。API 也會回報這個狀態（`/api/status` 的 `ytDetectWarn`、`/api/devices` 每台裝置的 `ytDetectWarn`）。
+舊版的 `video_timeout_s` 已移除（設定檔裡留著也不影響）。影片 IP 的過期時間改由 `nftables.conf` 中 `ytvideo` 的 `timeout` 決定。
+
+從舊版升級時，`ytvideo` 集合的格式改了，`install.sh` 會重新載入 nftables 規則，已學到的影片 IP 會清空一次。正在播放的影片要等裝置下次查 DNS（通常幾分鐘內）才會重新被辨識。
+
+### 辨識失效警示
+
+如果裝置找到繞過 DNS 代理的方式（例如新的加密 DNS 伺服器），時數和封鎖會無聲失效。所以系統會偵測這個特徵：
+
+- 最近 5 分鐘內查過 YouTube 的網域（`youtube_app_domains`）至少 2 次；
+- 總流量至少 20 MB；
+- 但被辨識為 YouTube 影片的流量不到 5%。
+
+持續 2 分鐘就在設定頁顯示「⚠️ YouTube 辨識可能失效」，也會寫入系統日誌（`journalctl -u netflow`）；恢復正常 5 分鐘後警示自動消失。被封鎖 YouTube 的裝置不會觸發。API 也會回報這個狀態（`/api/status` 的 `ytDetectWarn`、`/api/devices` 每台裝置的 `ytDetectWarn`）。
+
+門檻可在設定檔調整：
+
+| 設定 | 預設 | 意義 |
+|---|---|---|
+| `health_window_sec` | 300 | 觀察的時間範圍（秒） |
+| `health_min_app_lookups` | 2 | 範圍內至少幾次 YouTube 查詢 |
+| `health_min_mb` | 20 | 範圍內總流量至少幾 MB |
+| `health_max_yt_share` | 0.05 | YouTube 影片流量低於這個比例才算可疑 |
+| `health_raise_sec` | 120 | 可疑狀態持續幾秒才警示 |
+| `health_clear_sec` | 300 | 恢復正常幾秒後解除警示 |
+
+**待實機確認**：電視版 YouTube 實際查詢的網域尚未在 Google TV 上驗證。建議啟用後暫時開 `log_queries`，在電視上播 YouTube，用 `journalctl -u netflow -f` 確認有出現 `youtube_app_domains` 裡的網域；若看到 Google TV 主畫面推薦內容讓播放其他串流時誤報，可提高 `health_min_app_lookups`。
 
 ## 檔案
 

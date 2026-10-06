@@ -33,7 +33,7 @@ for n in nf-wan nf-rtr nf-tv; do ip netns add $n; ip -n $n link set lo up; done
 ip link add w0 netns nf-wan type veth peer name ens18 netns nf-rtr
 ip link add eth0 netns nf-tv type veth peer name ens19 netns nf-rtr
 ip -n nf-wan addr add 10.99.0.1/24 dev w0; ip -n nf-wan link set w0 up
-for a in 8.8.8.8 9.9.9.9 173.194.9.9 93.184.0.10 93.184.0.20; do ip -n nf-wan addr add $a/32 dev lo; done
+for a in 8.8.8.8 9.9.9.9 173.194.9.9 173.194.9.10 93.184.0.10 93.184.0.20; do ip -n nf-wan addr add $a/32 dev lo; done
 ip -n nf-rtr addr add 10.99.0.2/24 dev ens18; ip -n nf-rtr link set ens18 up
 ip -n nf-rtr addr add 192.168.50.1/24 dev ens19; ip -n nf-rtr link set ens19 up
 ip -n nf-rtr route add default via 10.99.0.1
@@ -58,7 +58,9 @@ check "approved by default" "True" "$(dev approved)"
 echo "DNS through the proxy (even to a hard-coded 8.8.8.8)"
 check "plain name" "93.184.0.10" "$(tv resolve www.example.com)"
 check "video name" "173.194.9.9" "$(tv resolve rr1---sn-x.googlevideo.com)"
-check "video IP learned" "*173.194.9.9*" "$(rtr nft list set inet netflow ytvideo | tr -d '\n')"
+check "video IP learned for this TV" "*192.168.50.101 . 173.194.9.9*" "$(rtr nft list set inet netflow ytvideo | tr -d '\n')"
+check "name CNAMEd to video" "173.194.9.10" "$(tv resolve cdn-alias.example.net)"
+check "learned through the CNAME" "*192.168.50.101 . 173.194.9.10*" "$(rtr nft list set inet netflow ytvideo | tr -d '\n')"
 
 echo "forwarding, timing"
 check "site" "OK 2097152" "$(tv get http://93.184.0.10/)"
@@ -67,13 +69,22 @@ sleep 3
 check "usage time" "[1-9]*" "$(dev usedSec)"
 check "YouTube time" "[1-9]*" "$(dev ytUsedSec)"
 check "bytes counted" "[1-9]??????*" "$(dev down)"
+# Traffic on a pair renews it to the set's full timeout: shorten one by hand,
+# then use it.
+printf '%s\n' "destroy element inet netflow ytvideo { 192.168.50.101 . 173.194.9.9 }" \
+	"add element inet netflow ytvideo { 192.168.50.101 . 173.194.9.9 timeout 30s }" | rtr nft -f -
+tv get http://173.194.9.9/ >/dev/null
+check "traffic renews the pair" "*173.194.9.9 timeout 30s expires 5[0-9]m*" "$(rtr nft list set inet netflow ytvideo | tr -d '\n')"
 
 echo "encrypted DNS refused"
 check "DoT 853" "REFUSED" "$(tv connect 9.9.9.9 853)"
 check "DoH 8.8.8.8:443" "REFUSED" "$(tv connect 8.8.8.8 443)"
+check "DoH resolver name" "NXDOMAIN" "$(tv resolve dns.google)"
+check "Firefox DoH canary" "NXDOMAIN" "$(tv resolve use-application-dns.net)"
 tv api POST /api/global '{"resetMin":300,"defaultAllow":true,"activeKBmin":200,"blockEncDns":false}' >/dev/null
 sleep 2
 check "DoT when allowed" "OPEN" "$(tv connect 9.9.9.9 853)"
+check "DoH name when allowed" "93.184.0.10" "$(tv resolve dns.google)"
 tv api POST /api/global '{"resetMin":300,"defaultAllow":true,"activeKBmin":200,"blockEncDns":true}' >/dev/null
 
 echo "block YouTube"
@@ -81,6 +92,7 @@ MAC=$(dev mac)
 tv api POST /api/device "{\"mac\":\"$MAC\",\"approved\":true,\"quotaMin\":480,\"blockYoutube\":true}" >/dev/null
 sleep 1
 check "youtube NXDOMAIN" "NXDOMAIN" "$(tv resolve www.youtube.com)"
+check "CNAME into youtube NXDOMAIN" "NXDOMAIN" "$(tv resolve cdn-alias.example.net)"
 check "video refused" "FAIL*" "$(tv get http://173.194.9.9/)"
 check "other site fine" "OK 2097152" "$(tv get http://93.184.0.10/)"
 

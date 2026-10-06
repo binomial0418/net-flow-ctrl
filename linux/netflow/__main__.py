@@ -7,7 +7,7 @@ import logging
 import signal
 import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 from . import portal
 from .app import Conf, Controller
@@ -16,7 +16,10 @@ from .nft import Nft
 
 log = logging.getLogger("netflow")
 
-VIDEO_READD_SEC = 3600  # re-insert a learned address at most this often
+# Re-insert a learned (client, address) pair at most this often. Well inside the
+# ytvideo set's timeout (deploy/nftables.conf), so a lookup always renews a pair
+# before it could lapse; traffic on the pair renews it in between.
+VIDEO_READD_SEC = 600
 
 
 async def main(conf: Conf) -> None:
@@ -26,15 +29,18 @@ async def main(conf: Conf) -> None:
     # blocked before the restart is still blocked on its first packet.
     ctl.sync()
 
-    added: dict = {}
+    added: Dict[Tuple[str, str], float] = {}
 
-    async def on_video(addrs: List[Tuple[str, int]]) -> None:
+    async def on_video(client_ip: str, addrs: List[Tuple[str, int]]) -> None:
         now = time.monotonic()
-        fresh = [ip for ip, _ttl in addrs if now - added.get(ip, -VIDEO_READD_SEC) >= VIDEO_READD_SEC]
+        fresh = [(client_ip, ip) for ip, _ttl in addrs if now - added.get((client_ip, ip), -VIDEO_READD_SEC) >= VIDEO_READD_SEC]
         if fresh:
-            await nft.add_video_ips(fresh, conf.video_timeout_s)
-            for ip in fresh:
-                added[ip] = now
+            await nft.add_video(fresh)
+            if len(added) > 4096:  # forget pairs that are due a re-insert anyway
+                for k in [k for k, t in added.items() if now - t >= VIDEO_READD_SEC]:
+                    del added[k]
+            for k in fresh:
+                added[k] = now
 
     proxy = DnsProxy(
         conf.upstream_dns,
@@ -43,6 +49,8 @@ async def main(conf: Conf) -> None:
         on_query=ctl.note_query,
         youtube_domains=conf.youtube_domains,
         video_domains=conf.video_domains,
+        enc_dns_blocked=ctl.enc_dns_blocked,
+        enc_dns_domains=conf.enc_dns_domains,
     )
     await portal.serve(ctl, conf.http_port)
 

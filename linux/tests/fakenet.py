@@ -9,6 +9,9 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 VIDEO_IP = "173.194.9.9"
+ALIAS_VIDEO_IP = "173.194.9.10"  # reached through a CNAME into googlevideo.com
+# A name outside the YouTube lists that CNAMEs to the video CDN.
+ALIAS_NAME, ALIAS_TARGET = "cdn-alias.example.net", "rr5---sn-y.googlevideo.com"
 SITE_IP = "93.184.0.10"
 YT_FRONT_IP = "93.184.0.20"
 
@@ -42,6 +45,14 @@ def serve():
         while True:
             q, addr = s.recvfrom(1500)
             name, off = parse_qname(q)
+            if name == ALIAS_NAME:
+                target = qname(ALIAS_TARGET)
+                hdr = q[:2] + b"\x81\x80" + struct.pack("!HHHH", 1, 2, 0, 0)
+                cname = b"\xc0\x0c" + struct.pack("!HHIH", 5, 1, 300, len(target))
+                target_off = off + 4 + len(cname)  # where the CNAME's rdata starts
+                rr = struct.pack("!H", 0xC000 | target_off) + struct.pack("!HHIH", 1, 1, 300, 4)
+                s.sendto(hdr + q[12 : off + 4] + cname + target + rr + socket.inet_aton(ALIAS_VIDEO_IP), addr)
+                continue
             ip = answer_for(name)
             hdr = q[:2] + b"\x81\x80" + struct.pack("!HHHH", 1, 1, 0, 0)
             rr = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 300, 4) + socket.inet_aton(ip)
