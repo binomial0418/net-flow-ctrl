@@ -110,3 +110,21 @@ PR #1 把 `www.youtube.com`、`m.youtube.com` 也算進「App 使用中」，誤
    - 從 `youtube_app_domains` 移除背景也會查詢的網址。
    - 必要時改用其他更能代表「前景使用」的訊號。
 4. 調整完關閉 `log_queries`（記錄量很大）。
+
+## 偵測正在看的 YouTube 頻道（進行中）
+
+**原理**：網路流量全部加密，看不出頻道。改用 ADB 讀電視的媒體工作階段（`adb shell dumpsys media_session`）：YouTube App 會回報影片標題與頻道名稱（作者）。電視在 VM 網段內，VM 可直接連線。可延伸：設定頁顯示「正在看」、觀看歷史、封鎖特定頻道（偵測到就暫停或回主畫面）。
+
+**2026-10-06 進度**：
+- 客廳電視（192.168.50.194）已開啟開發人員選項與無線偵錯。
+- VM 上已安裝 Google 官方 platform-tools：`/opt/platform-tools/adb`（版本 37.0.1）。Debian 套件的 `adb` 也裝了，但不要用它。
+- `adb pair` **兩次都成功**（配對埠 35023、46799，每次開配對視窗都會換）。
+- **`adb connect` 失敗**：連 192.168.50.194:35189（使用者一開始提供的連線埠）時 TLS 交握失敗，錯誤 `Handshake failed in SSL_accept/SSL_connect [invalid library (0)]`。Debian 版和官方版的 adb 都一樣，表示是電視拒絕了這把金鑰。
+- 掃到電視開著的埠：5001（TvOverlay）、6466/6467（Android TV 遙控）、8008/8009/8443（Cast）、9000、10001、35189、35833、41875，以及當時的配對埠。
+
+**明天要確認**（在電視的「無線偵錯」畫面）：
+1. 畫面上方目前的「IP 位址和通訊埠」（主畫面的連線埠，不是配對視窗的）。
+2. 「已配對的裝置」清單裡有沒有 `duckegg@netFlowControlDebian`。
+3. 無線偵錯是否被關閉又重開過（會換埠，也可能讓配對失效）。
+
+依結果重新配對或改連正確的埠，連上後先跑一次 `dumpsys media_session`，確認看得到頻道名稱。
