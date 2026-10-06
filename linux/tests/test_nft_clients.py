@@ -26,9 +26,13 @@ class PolicyScript(unittest.TestCase):
         self.assertNotIn("add rule", s)
 
     def test_video(self):
-        s = video_script(["1.2.3.4", "1.2.3.4", "5.6.7.8"], 21600)
-        self.assertIn("destroy element inet netflow ytvideo { 1.2.3.4, 5.6.7.8 }", s)
-        self.assertIn("{ 1.2.3.4 timeout 21600s, 5.6.7.8 timeout 21600s }", s)
+        # Keyed by client: the same video address learned by two devices is two pairs.
+        pairs = [("192.168.50.101", "1.2.3.4"), ("192.168.50.101", "1.2.3.4"), ("192.168.50.102", "1.2.3.4")]
+        s = video_script(pairs)
+        elems = "{ 192.168.50.101 . 1.2.3.4, 192.168.50.102 . 1.2.3.4 }"
+        self.assertIn(f"destroy element inet netflow ytvideo {elems}", s)
+        self.assertIn(f"add element inet netflow ytvideo {elems}", s)
+        self.assertNotIn("timeout", s)  # the set's own timeout applies
 
 
 class Counters(unittest.TestCase):

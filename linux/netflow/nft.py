@@ -9,7 +9,7 @@ import logging
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Iterable, Optional
+from typing import Dict, FrozenSet, Iterable, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -58,15 +58,12 @@ def policy_script(p: Policy) -> str:
     return "\n".join(parts) + "\n"
 
 
-def video_script(ips: Iterable[str], timeout_s: int) -> str:
-    """(Re)insert learned video addresses with a fresh timeout. destroy is a
-    no-op for an absent element, and re-adding resets the expiry."""
-    ips = sorted(set(ips))
-    body = ", ".join(ips)
-    return (
-        f"destroy element {TABLE} ytvideo {{ {body} }}\n"
-        f"add element {TABLE} ytvideo {{ {', '.join(f'{ip} timeout {timeout_s}s' for ip in ips)} }}\n"
-    )
+def video_script(pairs: Iterable[Tuple[str, str]]) -> str:
+    """(Re)insert learned (client, video address) pairs. destroy is a no-op for
+    an absent element, and re-adding resets its expiry to the set's timeout;
+    traffic on the pair keeps refreshing it from the packet path after that."""
+    elems = ", ".join(f"{c} . {v}" for c, v in sorted(set(pairs)))
+    return f"destroy element {TABLE} ytvideo {{ {elems} }}\nadd element {TABLE} ytvideo {{ {elems} }}\n"
 
 
 def parse_counters(doc: dict) -> Dict[str, Dict[str, int]]:
@@ -110,10 +107,10 @@ class Nft:
             return {name: {} for name in ACCT_SETS}
         return parse_counters(json.loads(r.stdout))
 
-    async def add_video_ips(self, ips: Iterable[str], timeout_s: int) -> None:
+    async def add_video(self, pairs: Iterable[Tuple[str, str]]) -> None:
         proc = await asyncio.create_subprocess_exec(
             NFT, "-f", "-", stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
-        _, err = await proc.communicate(video_script(ips, timeout_s).encode())
+        _, err = await proc.communicate(video_script(pairs).encode())
         if proc.returncode != 0:
             log.error("nft video add failed: %s", err.decode().strip())

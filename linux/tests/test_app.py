@@ -239,11 +239,69 @@ class RecognitionHealth(unittest.TestCase):
         self.run_for(400, yt=200 * KB)
         self.assertFalse(self.warn)
 
+    def test_tv_app_lookups_count(self):
+        # The TV app loads www.youtube.com rather than youtubei.googleapis.com.
+        self.h.ctl.note_query(TV_IP, "www.youtube.com")
+        self.h.ctl.note_query(TV_IP, "m.youtube.com")
+        self.assertEqual(len(self.h.ctl.rt[TV].app_lookups), 2)
+
+    def test_thresholds_from_conf(self):
+        self.run_for(60)
+        self.assertFalse(self.warn)  # defaults: 20 MB in, then 120 s more
+        self.h.conf.health_min_mb, self.h.conf.health_raise_sec = 5, 30
+        self.run_for(25)
+        self.assertFalse(self.warn)
+        self.run_for(10)
+        self.assertTrue(self.warn)
+
+    def test_window_from_conf(self):
+        self._tmp2 = tempfile.TemporaryDirectory()
+        h = Harness(Path(self._tmp2.name))
+        h.conf.health_window_sec = 30
+        h.ctl = h.make()
+        h.tick()
+        self.assertEqual(len(h.ctl.rt[TV].long_all._win), 30)
+        self._tmp2.cleanup()
+
+    def test_query_log(self):
+        with self.assertNoLogs("netflow.app", level="INFO"):
+            self.h.ctl.note_query(TV_IP, "www.example.com")
+        self.h.conf.log_queries = True
+        with self.assertLogs("netflow.app", level="INFO") as cm:
+            self.h.ctl.note_query(TV_IP, "www.example.com")
+        self.assertIn(f"query {TV_IP} www.example.com", cm.output[0])
+
     def test_other_lookups_ignored(self):
         for _ in range(5):
             self.h.ctl.note_query(TV_IP, "www.google.com")
             self.h.ctl.note_query("192.168.50.250", "youtubei.googleapis.com")  # unknown client
         self.assertEqual(self.h.ctl.rt[TV].app_lookups, [])
+
+
+class ConfLoad(unittest.TestCase):
+    def test_domains_normalised_and_unknown_keys_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "netflow.json"
+            p.write_text(json.dumps({
+                "video_domains": ["GoogleVideo.com.", " newcdn.net ", ""],
+                "video_timeout_s": 21600,  # dropped option: ignored, not an error
+                "health_min_mb": 50,
+            }))
+            c = Conf.load(p)
+        self.assertEqual(c.video_domains, ["googlevideo.com", "newcdn.net"])
+        self.assertEqual(c.health_min_mb, 50)
+        self.assertIn("dns.google", c.enc_dns_domains)
+        self.assertFalse(c.log_queries)
+
+    def test_missing_file_gives_defaults(self):
+        self.assertEqual(Conf.load(Path("/nonexistent/netflow.json")), Conf())
+
+    def test_enc_dns_flag_follows_setting(self):
+        with tempfile.TemporaryDirectory() as d:
+            h = Harness(Path(d))
+            self.assertTrue(h.ctl.enc_dns_blocked())
+            h.ctl.st.cfg.block_enc_dns = False
+            self.assertFalse(h.ctl.enc_dns_blocked())
 
 
 class Deltas(unittest.TestCase):
