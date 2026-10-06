@@ -65,3 +65,22 @@
 
 - **投放（Cast）訊息畫面**：會中斷播放；時間到斷網後，接收端無法從網路載入。
 - **網路登入頁（captive portal）**：Google TV 支援很差，頂多顯示「已連線，但無網際網路」。
+
+## 調整「YouTube 辨識可能失效」警示，避免誤報
+
+**問題**：警示條件之一是「最近 5 分鐘查詢過 YouTube App 的網址至少 2 次」，用來判斷 YouTube App 正在使用。但 ESP32 版實測時，電視在播 **Hami Video** 期間，背景仍查詢了 `youtubei.googleapis.com` 2 次。Google TV 上的 YouTube App 即使沒開也會在背景連線，所以看其他影音 App（流量大、又幾乎沒有 YouTube 影片流量）時，可能被誤判為「YouTube 辨識失效」。
+
+PR #1 把 `www.youtube.com`、`m.youtube.com` 也算進「App 使用中」，誤報機率可能再高一些（PR 註明尚未在 Google TV 上確認）。
+
+**作法**：VM 啟用、電視改連新網路後：
+
+1. 在 `/etc/netflow/netflow.json` 開啟 `"log_queries": true`，重啟服務。
+2. 分別記錄一段時間（例如各 10 分鐘），用 `journalctl -u netflow` 觀察：
+   - 實際觀看 YouTube 時，App 相關網址的查詢頻率。
+   - 觀看 Hami Video 等其他 App、YouTube 在背景時的查詢頻率。
+   - 停在 Google TV 首頁時的查詢頻率。
+3. 依兩者差異調整條件，例如：
+   - 提高 `health_min_app_lookups`（5 分鐘內的最少查詢次數）。
+   - 從 `youtube_app_domains` 移除背景也會查詢的網址。
+   - 必要時改用其他更能代表「前景使用」的訊號。
+4. 調整完關閉 `log_queries`（記錄量很大）。

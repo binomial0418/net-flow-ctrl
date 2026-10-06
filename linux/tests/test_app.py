@@ -3,6 +3,7 @@ table faked out."""
 import json
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -264,8 +265,10 @@ class RecognitionHealth(unittest.TestCase):
         self._tmp2.cleanup()
 
     def test_query_log(self):
-        with self.assertNoLogs("netflow.app", level="INFO"):
+        # (assertNoLogs is 3.10+; the tests also run on 3.9)
+        with mock.patch("netflow.app.log") as log:
             self.h.ctl.note_query(TV_IP, "www.example.com")
+        log.info.assert_not_called()
         self.h.conf.log_queries = True
         with self.assertLogs("netflow.app", level="INFO") as cm:
             self.h.ctl.note_query(TV_IP, "www.example.com")
