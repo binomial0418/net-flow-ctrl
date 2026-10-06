@@ -54,6 +54,7 @@ def make_app(ctl: Controller) -> web.Application:
     app.router.add_post("/api/device", poster(ctl.update_device))
     app.router.add_post("/api/global", poster(ctl.update_global))
     app.router.add_post("/api/extend", poster(ctl.extend))
+    app.router.add_post("/api/notify-test", poster(ctl.notify_test))
     app.router.add_post("/api/reset-usage", reset_usage)
     app.router.add_route("*", "/{tail:.*}", elsewhere)
     return app

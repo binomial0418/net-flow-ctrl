@@ -93,6 +93,12 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   <div class="hint">勾選後，超出時段或時數用盡時<b>只中斷 YouTube</b>，其他網路照常可用。</div>
   <div class="chk"><input type="checkbox" id="dYtBlk"><label for="dYtBlk" style="margin:0">封鎖 YouTube</label></div>
   <div class="hint">任何時候都不可連 YouTube（本日延長也不解除）。</div>
+  <div class="chk"><input type="checkbox" id="dNotify"><label for="dNotify" style="margin:0">時間提醒通知</label></div>
+  <div class="grid">
+    <div><label>提前幾分鐘提醒</label><input id="dNotifyMin" type="number" min="1" max="120"></div>
+    <div style="align-self:end"><button type="button" class="sec" id="dNotifyTest">送測試通知</button></div>
+  </div>
+  <div class="hint">快到時間、時間到時在電視上跳出通知；延長後再到期也會再提醒。需在電視安裝 TvOverlay。</div>
   <div class="chk"><input type="checkbox" id="dManual"><label for="dManual" style="margin:0">手動永久封鎖（不受每日重置影響）</label></div>
   <div class="row" style="justify-content:space-between">
     <button type="button" class="danger" id="dDel">刪除</button>
@@ -181,6 +187,7 @@ window.edit=i=>{
   $('dWinS').value=hhmm(cur.winStart);$('dWinE').value=hhmm(cur.winEnd);
   $('dQuoEn').checked=cur.quotaEnabled;$('dQuo').value=cur.quotaMin;
   $('dYtOnly').checked=cur.ytOnlyLimit;$('dYtBlk').checked=cur.blockYoutube;
+  $('dNotify').checked=cur.notifyEnabled;$('dNotifyMin').value=cur.notifyWarnMin;
   $('dManual').checked=cur.manualBlock;$('dlg').showModal();
 };
 $('dCancel').onclick=()=>$('dlg').close();
@@ -188,8 +195,12 @@ $('dSave').onclick=async()=>{
   const r=await jpost('/api/device',{mac:cur.mac,name:$('dName').value,approved:$('dAppr').checked,
     winEnabled:$('dWinEn').checked,winStart:toMin($('dWinS').value),winEnd:toMin($('dWinE').value),
     quotaEnabled:$('dQuoEn').checked,quotaMin:+$('dQuo').value,manualBlock:$('dManual').checked,
-    ytOnlyLimit:$('dYtOnly').checked,blockYoutube:$('dYtBlk').checked});
+    ytOnlyLimit:$('dYtOnly').checked,blockYoutube:$('dYtBlk').checked,
+    notifyEnabled:$('dNotify').checked,notifyWarnMin:+$('dNotifyMin').value});
   if(r){$('dlg').close();toast('已儲存');loadDevs()}
+};
+$('dNotifyTest').onclick=async()=>{
+  if(await jpost('/api/notify-test',{mac:cur.mac}))toast('已送出，請看電視畫面');
 };
 $('dDel').onclick=async()=>{
   if(!confirm('刪除此裝置的所有設定與統計？'))return;

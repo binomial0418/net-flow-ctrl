@@ -2,6 +2,8 @@
 
 ## 時間快到／時間到的提示
 
+> **已實作（2026-10-06）**，使用方式見 [README.md](README.md#時間提醒通知)。以下保留當時的調查與實測紀錄。尚未實測：音效、播放中送通知是否會卡住。
+
 **目標**：在使用者的螢幕上提示「時間快到了」與「時間到了」。主要裝置是 Google TV（電視內建與外接電視盒），手機較少。
 
 ### 做法：電視裝通知 App，由 VM 直接推播
@@ -26,7 +28,31 @@
   - 兩者取先到者；有本日延長時以延長到的時間為準。
 - 每個提醒在同一個邏輯日只送一次，重開機不重送（記錄在狀態檔）。
 
-### 候選 App 與音效
+### 已驗證：TvOverlay（2026-10-06）
+
+在客廳電視（192.168.50.194）安裝 **TvOverlay**（Play 商店，`com.tabdeveloper.tvoverlay`），從 VM 送出測試通知，**畫面上可以正常顯示**：
+
+- 電視上監聽 **5001** 埠，`POST /notify`，JSON 欄位：`title`、`message`、`source`、`duration`（秒），另有 `image`、`video`、位置等（[GitHub](https://github.com/gugutab/TvOverlay)、[欄位定義](https://github.com/gugutab/TvOverlay/blob/main/json/notification.json)）。
+- 回應 `{"success":true,"message":"Notification received"}`。
+
+Notifications for Android TV 在台灣區 Play 商店找不到；Android TV Notifier 主要用來從手機轉送通知，沒有公開 API，不採用。
+
+**尚待確認**：音效（文件沒寫，可試 `video` 欄位帶有聲短片）、中文顯示、播放影片時送通知是否會中斷播放。
+
+**字體太小的解法（已驗證可行）**：TvOverlay 的 API 與內建版面（預設、極簡、只顯示圖示）都不能調字體大小。改由 VM 用 Pillow 把提醒文字以大字畫成 PNG（例如 960×300、主文字 110 px 粗體），以 Base64 放進 `image` 欄位送出，電視上顯示清楚。
+- VM 需要套件 `python3-pil`、`fonts-noto-cjk`（已手動安裝，實作時要加進 `deploy/install.sh`）。
+- 字型：`/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc`，`index=2` 是繁體中文。
+
+**通知上方的小字無法完全拿掉（2026-10-06 實測）**：
+- 不帶標題、內容，只送圖片：上方仍有一行「REST API」。
+- `source` 設成零寬字元：仍顯示「REST API」；設成「上網提醒」：顯示「上網提醒 REST API」。「REST API」是 TvOverlay 固定加上的（通知經由 API 送入），從外部無法移除。
+- 版面「Minimalist」：只有圖片的通知完全不顯示。版面「Icon Only」：圖片要放在 `largeIcon` 才顯示，但「REST API」仍在。
+- 目前維持「Default」版面＋原本的格式（標題、內容、圖片）。
+- 之後可再嘗試：TvOverlay 付費版自訂版面（官方稱可自行設計版面），或改用 PiPup（側載 APK）。
+
+**TvOverlay 預設會在右上角常駐一個時鐘**：用 `POST :5001/set/overlay`、`{"clockOverlayVisibility": 0}` 關掉（已在客廳電視關閉）。實作時，每台電視啟用提醒時自動送一次，不用手動設定。通知預設出現在右上角（`hotCorner: top_end`）。
+
+### 候選 App 與音效（調查時的紀錄）
 
 | App | 音效 | 安裝 | 說明 |
 |---|---|---|---|

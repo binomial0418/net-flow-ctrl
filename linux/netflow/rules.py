@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import List, Optional, Tuple
 
 from .model import ACTIVE_WINDOW_SEC, DeviceRule, Reason
 
@@ -71,3 +72,37 @@ class ActivityWindow:
         self._win[self._idx] = delta_bytes
         self._idx = (self._idx + 1) % len(self._win)
         return self.total >= threshold_bytes
+
+
+def time_left(
+    d: DeviceRule, now: datetime, *, time_valid: bool, today: int, reset_min: int
+) -> Optional[Tuple[int, str]]:
+    """Seconds until a time limit cuts the device and which limit it is
+    ("quota", "window" or "extension"); None when no time limit applies.
+
+    The quota is in seconds of use (it only runs while the device is active),
+    the window and the extension in wall-clock seconds -- close enough for a
+    reminder. While an extension is active nothing can cut before it ends, so
+    a limit due earlier is pushed to the extension's end."""
+    now_s = now.hour * 3600 + now.minute * 60 + now.second
+    limits: List[Tuple[int, str]] = []
+    if d.quota_enabled:
+        limits.append((max(0, d.quota_min * 60 - d.used_sec), "quota"))
+    if time_valid and d.win_enabled and d.win_start != d.win_end:
+        if in_window(now.hour * 60 + now.minute, d.win_start, d.win_end):
+            limits.append(((d.win_end * 60 - now_s) % 86400, "window"))
+        else:
+            limits.append((0, "window"))
+    if not limits:
+        return None
+    ext_left = None
+    if time_valid and extension_active(d, now.hour * 60 + now.minute, today, reset_min):
+        now_rel = (now_s - reset_min * 60) % 86400
+        ext_left = (d.extend_min * 60 - reset_min * 60) % 86400 - now_rel
+    best: Optional[Tuple[int, str]] = None
+    for secs, kind in limits:
+        if ext_left is not None and secs <= ext_left:
+            secs, kind = ext_left, "extension"
+        if best is None or secs < best[0]:
+            best = (secs, kind)
+    return best

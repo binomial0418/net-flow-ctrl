@@ -33,6 +33,8 @@ class Reason(IntEnum):
 
 FULL_BLOCK = {Reason.MANUAL, Reason.WINDOW, Reason.QUOTA, Reason.UNAPPROVED}
 YT_LIMIT = {Reason.YT_WINDOW, Reason.YT_QUOTA}
+# Cut by a time limit (what a "time is up" reminder announces).
+TIME_CUT = {Reason.WINDOW, Reason.QUOTA, Reason.YT_WINDOW, Reason.YT_QUOTA}
 
 
 @dataclass
@@ -56,6 +58,9 @@ class DeviceRule:
     block_youtube: bool = False  # cut YouTube at all times
     yt_only_limit: bool = False  # a tripped limit cuts only YouTube
     yt_used_sec: int = 0  # seconds today spent streaming YouTube video
+    # On-screen reminders through TvOverlay on the device (see notifier.py).
+    notify_enabled: bool = False
+    notify_warn_min: int = 10  # warn this many minutes before a time limit cuts
 
 
 @dataclass

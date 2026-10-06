@@ -4,6 +4,19 @@
 
 ESP32 版（[../esp32/](../esp32/)）維持不變，作為備援。兩版的規則判定、計時方式與設定頁相同。
 
+**2026-10-06 起正式上線**：電視改連新 AP，經 VM 上網，4K 播放順暢；ESP32 已停用。
+
+## 使用
+
+| 你的手機／電腦連在 | 設定頁 |
+|---|---|
+| 家用 WiFi（RT2600ac） | **http://netflow.local** 或 http://10.0.4.188 |
+| 電視那台 AP 的 WiFi | http://192.168.50.1 |
+
+不需帳號密碼。HomeBoard 用 `netflow.local` 連線，與 ESP32 版的 API 相容，不用改。
+
+**ESP32 版不可再同時開機**：它也會使用 `netflow.local` 這個名字，兩台互搶時 HomeBoard 可能連錯對象。要切回 ESP32 備援時，先在 VM 上停用 avahi（`sudo systemctl disable --now avahi-daemon`）。
+
 ## 架構
 
 ```
@@ -14,7 +27,9 @@ ESP32 版（[../esp32/](../esp32/)）維持不變，作為備援。兩版的規�
                               ├─ netflow.service（Python）
                               │    ├─ DNS 代理：YouTube 辨識、封鎖、學習影片 IP
                               │    ├─ 每秒：偵測裝置、計時、規則判定、更新 nftables
+                              │    ├─ 時間提醒：推送到電視上的 TvOverlay
                               │    └─ 設定頁與 API（:80）
+                              ├─ avahi：在家用網路以 netflow.local 回應
                               └─ nftables：NAT、依 MAC 封鎖、每台裝置流量計數、擋加密 DNS
                                     │
                               PVE enp3s0 / vmbr0 ──> RT2600ac
@@ -33,6 +48,18 @@ ESP32 版（[../esp32/](../esp32/)）維持不變，作為備援。兩版的規�
 | 設定儲存 | NVS | `/var/lib/netflow/state.json`（寫入暫存檔後原子性替換，斷電不會寫壞） |
 | 對外連線 | WiFi STA | 網路線（ens18），沒有 WiFi 掃描、NTP 設定（系統自動校時） |
 | 當機恢復 | 看門狗、定時重開 | systemd 自動重啟；nftables 規則在程式重啟期間仍然有效 |
+| 時間提醒 | 無 | 快到期、時間到時在電視上跳出大字通知（見下方） |
+
+## 時間提醒通知
+
+在電視上安裝 **TvOverlay**（Play 商店），裝置設定裡勾選「時間提醒通知」並設定提前幾分鐘（預設 10 分鐘）。
+
+- **快到期**：剩餘時間低於設定值時，顯示「還剩 X 分鐘」。剩餘時間取時數上限、時段、本日延長中最先到的那個。時數上限依實際使用計時，閒置時不倒數。
+- **時間到**：被時數上限或時段切斷時，顯示「時間到了」。只限 YouTube 的裝置顯示「YouTube 時間到了／其他 App 可以繼續使用」。
+- **延長後會再提醒**：提醒跟著每一次「到期」走，不是一天一次。按了本日延長、調高上限後，再快到期、再到期都會再提醒；延長得很短也會立刻提醒剩幾分鐘。
+- VM 重開機不會補送已經過了的提醒。電視關機或沒裝 TvOverlay 時，送不到就略過，不影響管控。
+- 通知內容由 VM 畫成大字圖片送出，只送圖片；TvOverlay 會固定在上方加一行「REST API」小字，無法移除。第一次送通知時，會自動關掉 TvOverlay 內建的常駐時鐘，並把版面設成「Default」。
+- 設定頁的「送測試通知」可以確認電視收得到。
 
 ## YouTube 辨識的維護
 
@@ -121,10 +148,12 @@ ESP32 版（[../esp32/](../esp32/)）維持不變，作為備援。兩版的規�
 | `netflow/nft.py` | 更新 nftables 集合與鏈、讀取流量計數 |
 | `netflow/dnsproxy.py`、`dnsmsg.py` | DNS 代理與 DNS 封包解析 |
 | `netflow/clients.py` | 從 DHCP 租約與鄰居表找出線上裝置 |
-| `netflow/portal.py`、`page.html` | 設定頁與 JSON API（與 ESP32 版相同） |
+| `netflow/portal.py`、`page.html` | 設定頁與 JSON API（與 ESP32 版相同，另加 `/api/notify-test`） |
+| `netflow/notifier.py` | 把時間提醒畫成大字圖片，推送到電視上的 TvOverlay |
 | `netflow/store.py` | 狀態存檔 |
 | `deploy/` | nftables 規則、dnsmasq 設定、systemd 服務、安裝腳本 |
 | `tests/` | 單元測試、命名空間整合測試 |
+| `tools/preview.py` | 在本機用範例資料預覽設定頁 |
 
 ## 測試
 
@@ -157,9 +186,9 @@ ssh netflow-vm 'cd ~/netflow-src && sudo sh deploy/install.sh --activate'
 
 | 階段 | 內容 | 狀態 |
 |---|---|---|
-| 1 | 網路打通：NAT、DHCP | 設定完成，等 AP 接上後啟用 |
-| 2 | 基本管控：nftables 規則、常駐程式、設定頁 | 完成，整合測試通過 |
-| 3 | YouTube：DNS 代理、影片 IP 集合、擋加密 DNS | 完成，整合測試通過 |
-| 4 | 收尾：實機驗證、文件 | 進行中 |
+| 1 | 網路打通：NAT、DHCP | 完成，2026-10-06 上線，4K 實測順暢 |
+| 2 | 基本管控：nftables 規則、常駐程式、設定頁 | 完成，實機運作中 |
+| 3 | YouTube：DNS 代理、影片 IP 集合、擋加密 DNS | 完成，實機辨識率 100% |
+| 4 | 時間提醒、netflow.local（HomeBoard 免改） | 完成，實機運作中 |
 
 後續規劃見 [TODO.md](TODO.md)。

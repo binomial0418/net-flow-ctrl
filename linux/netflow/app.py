@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass, field, fields
 from datetime import datetime
@@ -12,8 +13,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import clients, dnsmsg, rules, store
-from .model import FULL_BLOCK, YT_LIMIT, DeviceRule, Reason
+from .model import FULL_BLOCK, TIME_CUT, YT_LIMIT, DeviceRule, Reason
 from .nft import Policy
+from .notifier import Notice
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +61,9 @@ class Conf:
     health_max_yt_share: float = 0.05
     health_raise_sec: int = 120
     health_clear_sec: int = 300
+    # Reminders through TvOverlay on the devices (notifier.py).
+    tvoverlay_port: int = 5001
+    notify_duration_s: int = 20
 
     @classmethod
     def load(cls, path: Path) -> "Conf":
@@ -97,6 +102,11 @@ class Runtime:
     suspect_sec: int = 0  # consecutive seconds the tell has held
     clear_sec: int = 0  # consecutive seconds it has not
     yt_warn: bool = False
+    # Reminders (see _check_notices). Not persisted: the first tick after a
+    # start only primes them, so a restart never replays a reminder.
+    notice_primed: bool = False
+    warn_armed: bool = False
+    cut_armed: bool = False
 
 
 class CounterDeltas:
@@ -168,6 +178,7 @@ class Controller:
         self.time_valid = False
         self.started = time.monotonic()
         self._last_save = time.monotonic()
+        self.outbox: List[Notice] = []  # reminders for the main loop to deliver
 
     # ------------------------------------------------------------- helpers --
 
@@ -213,6 +224,7 @@ class Controller:
         self._check_daily_reset(now)
         self._collect_and_accrue()
         self.sync()  # after accruing, so a device that just ran out is cut this tick
+        self._check_notices(now)
         if time.monotonic() - self._last_save >= USAGE_SAVE_SEC:
             self.save()
 
@@ -349,6 +361,71 @@ class Controller:
         if quota_hit:
             self.save()
 
+    # ----------------------------------------------------------- reminders --
+
+    def _check_notices(self, now: datetime) -> None:
+        """Warn before a time limit cuts, and say so when it has. Not once a
+        day but once per run-up to a cut: when time is added back (an
+        extension, a raised quota) both reminders re-arm, so a device that is
+        extended and runs out again is told again."""
+        for mac, dev in self.st.devices.items():
+            rt = self.rt[mac]
+            left = rules.time_left(
+                dev, now, time_valid=self.time_valid, today=self.st.day_key, reset_min=self.st.cfg.reset_min
+            )
+            allowed = rt.reason == Reason.ALLOWED
+            cut = rt.reason in TIME_CUT
+            warn_s = dev.notify_warn_min * 60
+            due = allowed and left is not None and 0 < left[0] <= warn_s
+            if not rt.notice_primed:
+                rt.warn_armed, rt.cut_armed, rt.notice_primed = not due, not cut, True
+                continue
+            if allowed:
+                if not rt.cut_armed:
+                    # Back from a cut: a new run-up, so warn again even if it is short.
+                    rt.cut_armed = rt.warn_armed = True
+                elif left is None or left[0] > warn_s + 60:  # margin: no flapping at the line
+                    rt.warn_armed = True
+            send = dev.notify_enabled and rt.online and bool(rt.ip)
+            if due and rt.warn_armed:
+                rt.warn_armed = False
+                if send:
+                    self.outbox.append(self._warn_notice(dev, rt, left))
+            if cut and rt.cut_armed:
+                rt.cut_armed = False
+                if send:
+                    self.outbox.append(self._cut_notice(dev, rt))
+
+    def _warn_notice(self, dev: DeviceRule, rt: Runtime, left: Tuple[int, str]) -> Notice:
+        mins = max(1, math.ceil(left[0] / 60))
+        yt = dev.yt_only_limit and left[1] != "extension"
+        big = f"YouTube 還剩 {mins} 分鐘" if yt else f"還剩 {mins} 分鐘"
+        if left[1] == "window":
+            sub = f"{dev.name} 可用時段到 {dev.win_end // 60:02d}:{dev.win_end % 60:02d}"
+        elif left[1] == "extension":
+            sub = f"{dev.name} 延長時間到 {dev.extend_min // 60:02d}:{dev.extend_min % 60:02d}"
+        else:
+            sub = f"{dev.name} 今天的{'YouTube ' if yt else '上網'}時間"
+        return Notice(rt.ip, big, sub)
+
+    def _cut_notice(self, dev: DeviceRule, rt: Runtime) -> Notice:
+        if rt.reason in YT_LIMIT:
+            return Notice(rt.ip, "YouTube 時間到了", "其他 App 可以繼續使用")
+        if rt.reason == Reason.QUOTA:
+            return Notice(rt.ip, "時間到了", f"{dev.name} 今天的上網時數已用完")
+        return Notice(rt.ip, "時間到了", f"{dev.name} 已超過可使用時段")
+
+    def drain_outbox(self) -> List[Notice]:
+        out, self.outbox = self.outbox, []
+        return out
+
+    def notify_test(self, body: Dict[str, Any]) -> None:
+        d = self._device(body)
+        rt = self.rt[d.mac]
+        if not rt.ip:
+            raise ApiError(409, "device offline")
+        self.outbox.append(Notice(rt.ip, "通知測試", f"{d.name} 的提醒通知正常"))
+
     def reset_usage(self) -> None:
         for dev in self.st.devices.values():
             dev.used_sec = dev.yt_used_sec = 0
@@ -401,6 +478,8 @@ class Controller:
                     "blockYoutube": d.block_youtube,
                     "ytOnlyLimit": d.yt_only_limit,
                     "ytDetectWarn": rt.yt_warn,
+                    "notifyEnabled": d.notify_enabled,
+                    "notifyWarnMin": d.notify_warn_min,
                     "up": d.up_bytes,
                     "down": d.down_bytes,
                     # extendUntil: the target if the extension is for today, else 0.
@@ -434,6 +513,8 @@ class Controller:
             d.manual_block = bool(body.get("manualBlock", False))
             d.block_youtube = bool(body.get("blockYoutube", False))
             d.yt_only_limit = bool(body.get("ytOnlyLimit", False))
+            d.notify_enabled = bool(body.get("notifyEnabled", d.notify_enabled))
+            d.notify_warn_min = max(1, min(120, int(body.get("notifyWarnMin", d.notify_warn_min))))
         self.save()
         self.sync()
 

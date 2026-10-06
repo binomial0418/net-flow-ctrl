@@ -307,6 +307,96 @@ class ConfLoad(unittest.TestCase):
             self.assertFalse(h.ctl.enc_dns_blocked())
 
 
+class Reminders(unittest.TestCase):
+    """Warn before a time limit cuts, and when it has -- once per run-up."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.h = Harness(Path(self._tmp.name), now=datetime(2026, 7, 17, 20, 0))
+        self.h.tick()
+        d = self.h.dev
+        d.name, d.notify_enabled, d.notify_warn_min = "客廳電視", True, 10
+        d.quota_enabled, d.quota_min = True, 15
+        self.h.ctl.drain_outbox()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def run_for(self, secs, down=50 * KB):
+        out = []
+        for _ in range(secs):
+            self.h.tick(down=down)
+            out += self.h.ctl.drain_outbox()
+        return [n.big for n in out], out
+
+    def test_warn_cut_extend_warn_cut(self):
+        # 15 min quota, warn at 10 min left: the warning comes after ~5 min of use.
+        bigs, out = self.run_for(15 * 60 + 10)
+        self.assertEqual(bigs, ["還剩 10 分鐘", "時間到了"])
+        self.assertEqual(out[0].ip, TV_IP)
+        self.assertIn("今天的上網時數已用完", out[1].sub)
+        # Extended by 15 minutes: allowed again, warned again, cut again.
+        until = (self.h.now + timedelta(minutes=15)).hour * 60 + (self.h.now + timedelta(minutes=15)).minute
+        self.h.ctl.extend({"mac": TV, "untilMin": until})
+        bigs, out = self.run_for(16 * 60)
+        self.assertEqual(bigs, ["還剩 10 分鐘", "時間到了"])
+        self.assertIn("延長時間到", out[0].sub)
+
+    def test_short_extension_still_warns(self):
+        self.run_for(15 * 60 + 10)
+        until = (self.h.now + timedelta(minutes=4)).hour * 60 + (self.h.now + timedelta(minutes=4)).minute
+        self.h.ctl.extend({"mac": TV, "untilMin": until})
+        bigs, _ = self.run_for(5 * 60)
+        self.assertEqual(len(bigs), 2)
+        self.assertTrue(bigs[0].startswith("還剩 ") and bigs[0] != "還剩 10 分鐘")  # 3 or 4 minutes
+        self.assertEqual(bigs[1], "時間到了")
+
+    def test_raised_quota_rearms(self):
+        self.run_for(15 * 60 + 10)
+        self.h.dev.quota_min = 30
+        bigs, _ = self.run_for(15 * 60 + 10)
+        self.assertEqual(bigs, ["還剩 10 分鐘", "時間到了"])
+
+    def test_restart_does_not_replay(self):
+        self.run_for(6 * 60)  # inside the warning period, already warned
+        self.h.ctl.save()
+        self.h.ctl = self.h.make()
+        bigs, _ = self.run_for(60)
+        self.assertEqual(bigs, [])
+
+    def test_window_and_yt_only_wording(self):
+        d = self.h.dev
+        d.quota_enabled, d.yt_only_limit = False, True
+        d.win_enabled, d.win_start, d.win_end = True, 6 * 60, 20 * 60 + 15
+        bigs, out = self.run_for(16 * 60)
+        self.assertEqual(bigs, ["YouTube 還剩 10 分鐘", "YouTube 時間到了"])
+        self.assertIn("可用時段到 20:15", out[0].sub)
+        self.assertIn("其他 App 可以繼續使用", out[1].sub)
+
+    def test_disabled_sends_nothing_and_keeps_no_backlog(self):
+        self.h.dev.notify_enabled = False
+        self.assertEqual(self.run_for(15 * 60 + 10)[0], [])
+        self.h.dev.notify_enabled = True
+        self.assertEqual(self.run_for(30)[0], [])  # no stale reminders on enabling
+
+    def test_idle_device_does_not_count_down(self):
+        bigs, _ = self.run_for(15 * 60, down=0)
+        self.assertEqual(bigs, [])  # quota runs on use only
+
+    def test_api(self):
+        dev = self.h.ctl.devices()["devices"][0]
+        self.assertEqual((dev["notifyEnabled"], dev["notifyWarnMin"]), (True, 10))
+        self.h.ctl.update_device({"mac": TV, "approved": True, "quotaMin": 480, "notifyEnabled": True, "notifyWarnMin": 999})
+        self.assertEqual(self.h.dev.notify_warn_min, 120)
+        self.h.ctl.notify_test({"mac": TV})
+        self.assertEqual(self.h.ctl.drain_outbox()[0].big, "通知測試")
+        self.h.clients[TV].ip = ""
+        self.h.tick()
+        with self.assertRaises(ApiError) as e:
+            self.h.ctl.notify_test({"mac": TV})
+        self.assertEqual(e.exception.status, 409)
+
+
 class Deltas(unittest.TestCase):
     def test_baseline_new_and_recreated(self):
         c = CounterDeltas()

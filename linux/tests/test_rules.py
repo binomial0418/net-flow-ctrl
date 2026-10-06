@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime
 
 from netflow.model import DeviceRule, Reason
-from netflow.rules import ActivityWindow, day_key, evaluate, extension_active, in_window
+from netflow.rules import ActivityWindow, day_key, evaluate, extension_active, in_window, time_left
 
 RESET = 5 * 60
 
@@ -85,6 +85,54 @@ class Evaluate(unittest.TestCase):
         self.assertEqual(ev(d, 22 * 60, time_valid=False), Reason.QUOTA)
         d.manual_block = True
         self.assertEqual(ev(d, 22 * 60), Reason.MANUAL)
+
+
+class TimeLeft(unittest.TestCase):
+    DAY = 20260717
+
+    def left(self, d, h, m, s=0):
+        return time_left(d, datetime(2026, 7, 17, h, m, s), time_valid=True, today=self.DAY, reset_min=RESET)
+
+    def test_no_limits(self):
+        self.assertIsNone(self.left(DeviceRule(mac="m"), 12, 0))
+        self.assertIsNone(self.left(DeviceRule(mac="m", win_enabled=True, win_start=300, win_end=300), 12, 0))
+
+    def test_quota_in_seconds_of_use(self):
+        d = DeviceRule(mac="m", quota_enabled=True, quota_min=30, used_sec=600)
+        self.assertEqual(self.left(d, 12, 0), (1200, "quota"))
+        d.used_sec = 9999
+        self.assertEqual(self.left(d, 12, 0), (0, "quota"))
+
+    def test_window_by_clock(self):
+        d = DeviceRule(mac="m", win_enabled=True, win_start=6 * 60, win_end=21 * 60)
+        self.assertEqual(self.left(d, 20, 50, 30), (570, "window"))
+        self.assertEqual(self.left(d, 22, 0), (0, "window"))
+        d.win_start, d.win_end = 22 * 60, 2 * 60  # across midnight
+        self.assertEqual(self.left(d, 23, 0), (3 * 3600, "window"))
+
+    def test_earliest_limit_wins(self):
+        d = DeviceRule(mac="m", quota_enabled=True, quota_min=60, win_enabled=True, win_start=6 * 60, win_end=21 * 60)
+        self.assertEqual(self.left(d, 20, 40), (1200, "window"))
+        self.assertEqual(self.left(d, 12, 0), (3600, "quota"))
+
+    def test_extension_pushes_earlier_limits_to_its_end(self):
+        d = DeviceRule(mac="m", quota_enabled=True, quota_min=60, used_sec=3600, extend_min=22 * 60, extend_day=self.DAY)
+        self.assertEqual(self.left(d, 21, 30), (1800, "extension"))
+        # Quota far from used up: the extension does not shorten it.
+        d.used_sec = 0
+        self.assertEqual(self.left(d, 21, 30), (3600, "quota"))
+        # Window past its end at the extension's end: cut at the extension's end.
+        d.quota_enabled, d.win_enabled, d.win_start, d.win_end = False, True, 6 * 60, 21 * 60
+        self.assertEqual(self.left(d, 21, 30), (1800, "extension"))
+
+    def test_extension_into_small_hours(self):
+        d = DeviceRule(mac="m", quota_enabled=True, quota_min=1, used_sec=60, extend_min=60, extend_day=self.DAY)
+        self.assertEqual(self.left(d, 23, 30), (5400, "extension"))
+
+    def test_without_clock_only_quota(self):
+        d = DeviceRule(mac="m", quota_enabled=True, quota_min=10, win_enabled=True, win_start=6 * 60, win_end=7 * 60)
+        r = time_left(d, datetime(2026, 7, 17, 12, 0), time_valid=False, today=self.DAY, reset_min=RESET)
+        self.assertEqual(r, (600, "quota"))
 
 
 class Window(unittest.TestCase):

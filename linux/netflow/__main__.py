@@ -13,6 +13,7 @@ from . import portal
 from .app import Conf, Controller
 from .dnsproxy import DnsProxy
 from .nft import Nft
+from .notifier import Notifier
 
 log = logging.getLogger("netflow")
 
@@ -25,6 +26,7 @@ VIDEO_READD_SEC = 600
 async def main(conf: Conf) -> None:
     nft = Nft()
     ctl = Controller(conf, nft)
+    notifier = Notifier(conf.tvoverlay_port, conf.notify_duration_s)
     # Push the restored rules before anything else, so a device that was
     # blocked before the restart is still blocked on its first packet.
     ctl.sync()
@@ -76,6 +78,10 @@ async def main(conf: Conf) -> None:
             ctl.tick()
         except Exception:  # one bad tick must not take enforcement down
             log.exception("tick failed")
+        # Delivered in the background: a TV that does not answer must not
+        # hold up the next tick.
+        for n in ctl.drain_outbox():
+            asyncio.get_running_loop().create_task(notifier.send(n))
         next_tick += 1.0
         delay = next_tick - time.monotonic()
         if delay < 0:  # fell behind (suspend, long stall): resync, do not burst
