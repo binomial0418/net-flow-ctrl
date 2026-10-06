@@ -1,4 +1,4 @@
-# net-flow-ctrl
+# net-flow-ctrl — ESP32 版
 
 ESP32 雙模 WiFi 路由器，可針對**每一台**連入熱點的裝置，個別限制它連到外網的**時段**與**每日累積時數**。主要用於管控電視盒等裝置的上網時間。
 
@@ -309,15 +309,17 @@ flowchart TD
 * **需求**：arduino-cli + esp32 core 3.x + ArduinoJson 7.x
 * 其餘（WebServer / Preferences / WiFi / ESPmDNS）皆為核心內建
 
+以下指令在 repo 根目錄執行：
+
 ```bash
-arduino-cli compile -b esp32:esp32:esp32 .
-arduino-cli upload  -b esp32:esp32:esp32 -p /dev/cu.XXXX .
+arduino-cli compile -b esp32:esp32:esp32 esp32
+arduino-cli upload  -b esp32:esp32:esp32 -p /dev/cu.XXXX esp32
 ```
 
 部分 USB 轉序列晶片（如 CH340）在預設 921600 鮑率下燒錄會失敗，改用較保守的鮑率即可：
 
 ```bash
-arduino-cli compile -b esp32:esp32:esp32:UploadSpeed=115200 --upload -p /dev/cu.XXXX .
+arduino-cli compile -b esp32:esp32:esp32:UploadSpeed=115200 --upload -p /dev/cu.XXXX esp32
 ```
 
 編譯結果：Flash 約 79%（1,047,825 / 1,310,720 bytes），RAM 約 18%（61,492 bytes）。
@@ -378,7 +380,7 @@ arduino-cli compile -b esp32:esp32:esp32:UploadSpeed=115200 --upload -p /dev/cu.
 
 | 檔案 | 職責 |
 |---|---|
-| `net-flow-ctrl.ino` | 主流程、每秒 tick、規則同步、mDNS 啟動 |
+| `esp32.ino` | 主流程、每秒 tick、規則同步、mDNS 啟動 |
 | `nfc_filter.cpp` | netif hook、封包過濾、YouTube DNS 攔截、流量統計、NAPT / DNS 設定 |
 | `nfc_state.cpp` | 全域狀態、規則判定引擎、活躍視窗計時 |
 | `nfc_store.cpp` | NVS 讀寫 |
