@@ -15,7 +15,7 @@ ESP32 版（[../esp32/](../esp32/)）維持不變，作為備援。兩版的規�
 
 不需帳號密碼。HomeBoard 用 `netflow.local` 連線，與 ESP32 版的 API 相容，不用改。
 
-**ESP32 版不可再同時開機**：它也會使用 `netflow.local` 這個名字，兩台互搶時 HomeBoard 可能連錯對象。要切回 ESP32 備援時，先在 VM 上停用 avahi（`sudo systemctl disable --now avahi-daemon`）。
+**ESP32 版不可再同時開機**：它也會使用 `netflow.local` 這個名字，兩台互搶時 HomeBoard 可能連錯對象。要切回 ESP32 備援時，先在 VM 上停用 avahi（`sudo systemctl disable --now avahi-daemon`）；這樣電視網段的 iPhone 也會找不到 HomePod（見下方）。
 
 ## 架構
 
@@ -29,13 +29,39 @@ ESP32 版（[../esp32/](../esp32/)）維持不變，作為備援。兩版的規�
                               │    ├─ 每秒：偵測裝置、計時、規則判定、更新 nftables
                               │    ├─ 時間提醒：推送到電視上的 TvOverlay
                               │    └─ 設定頁與 API（:80）
-                              ├─ avahi：在家用網路以 netflow.local 回應
-                              └─ nftables：NAT、依 MAC 封鎖、每台裝置流量計數、擋加密 DNS
+                              ├─ avahi：在家用網路以 netflow.local 回應；兩邊網段互轉 mDNS
+                              └─ nftables：NAT（只對網際網路）、依 MAC 封鎖、每台裝置流量計數、擋加密 DNS
                                     │
                               PVE enp3s0 / vmbr0 ──> RT2600ac
 ```
 
-電視端網段 `192.168.50.0/24`，VM 為 `192.168.50.1`。
+電視端網段 `192.168.50.0/24`，VM 為 `192.168.50.1`。家用網段 `10.0.4.0/24`（`nftables.conf` 的 `HOME_NET`），VM 為 `10.0.4.188`。
+
+## iPhone 與 HomePod
+
+iPhone 也可以連電視那台 AP，一起管控 YouTube，同時照常使用家用網路上的 HomePod（AirPlay、「家庭」App）。這需要兩件事：
+
+1. **mDNS 互轉**：HomePod 靠 mDNS（Bonjour）被找到，而 mDNS 不會跨網段。VM 上的 avahi 開啟 reflector，在兩個網段之間轉送（`install.sh` 會設定）。
+2. **家用網段走路由、不做 NAT**：AirPlay 播放時，HomePod 會主動回連 iPhone（對時、事件通道）。所以 VM 對家用網段不做 NAT，並且**只允許 HomePod**（`nftables.conf` 的 `homepods` 集合：10.0.4.38、10.0.4.87、10.0.4.222）主動連進電視網段。家用網段的其他設備仍然連不進來，電視上的 TvOverlay、Cast、無線偵錯等服務不會暴露；連到網際網路仍然做 NAT，網際網路仍然無法連進來。
+
+   **HomePod 的 IP 要在 RT2600ac 綁定固定**（DHCP 保留），IP 變了就要更新 `homepods` 集合。
+
+**RT2600ac 必須加一條靜態路由**（SRM「網路中心」的靜態路由設定）：
+
+| 目的地網路 | 子網路遮罩 | 閘道 |
+|---|---|---|
+| 192.168.50.0 | 255.255.255.0 | 10.0.4.188 |
+
+**先加好這條路由，再更新 VM**。否則家用網段的設備（HomePod、NAS）回應電視網段時找不到路，連 NAS 也會中斷。加好後在家用網路的電腦上 `ping 192.168.50.1` 應該要通。
+
+其他注意事項：
+
+- iPhone 的「WiFi → 這個網路 → 私密 WiFi 位址」請設為**固定**（不要選「輪替」），否則 MAC 會變，管控系統會把它當成新裝置。
+- 時間到被封鎖時，iPhone 連 HomePod 也一併中斷（和連 NAS 一樣），只剩設定頁可用。
+- 用 AirPlay 播音樂到 HomePod 的流量會計入 iPhone 的使用時間（和看 NAS 影片一樣）。
+- 不做 NAT 之後，NAS 看到的來源是電視網段的 IP（192.168.50.x），不再是 VM 的 10.0.4.188。NAS 若有用 IP 限制 NFS 分享，或開了 Synology 防火牆、自動封鎖，要允許這個網段。
+- 去程（VM → NAS、HomePod）直接送達，回程經過 RT2600ac 的靜態路由（非對稱路由）。若 RT2600ac 的防火牆丟棄這類封包，電視看 NAS 會中斷——加好路由、更新 VM 後要實測。
+- avahi 的 mDNS 互轉偶爾會讓 Apple 裝置看到自己的名字而自動改名（例如「iPhone (2)」），這是 avahi reflector 的已知現象。附帶效果：家用網路上的手機也能找到並投放到電視。
 
 ## 與 ESP32 版的差異
 

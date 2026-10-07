@@ -10,10 +10,12 @@ cd "$(dirname "$0")/.."
 
 # aiohttp: the portal. Pillow + Noto CJK: large-type reminder images.
 # avahi: answer as netflow.local on the home LAN, the name HomeBoard (and the
-# ESP32 edition before) uses -- only one box may hold it at a time.
+# ESP32 edition before) uses -- only one box may hold it at a time. It also
+# reflects mDNS between the two networks, so an iPhone on the TV network finds
+# the HomePods on the home LAN.
 apt-get install -y -qq python3-aiohttp python3-pil fonts-noto-cjk avahi-daemon >/dev/null
-sed -i -e 's/^#\?host-name=.*/host-name=netflow/' -e 's/^#\?allow-interfaces=.*/allow-interfaces=ens18/' \
-	/etc/avahi/avahi-daemon.conf
+sed -i -e 's/^#\?host-name=.*/host-name=netflow/' -e 's/^#\?allow-interfaces=.*/allow-interfaces=ens18,ens19/' \
+	-e 's/^#\?enable-reflector=.*/enable-reflector=yes/' /etc/avahi/avahi-daemon.conf
 systemctl restart avahi-daemon
 
 install -d /opt/netflow/netflow /etc/netflow /var/lib/netflow
