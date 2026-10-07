@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from netflow.app import ApiError, Conf, Controller  # noqa: E402
 from netflow.clients import Client  # noqa: E402
+from netflow.history import day_minus  # noqa: E402
 
 PAGE = (Path(__file__).resolve().parent.parent / "netflow" / "page.html").read_bytes()
 MB = 1024 * 1024
@@ -63,6 +64,20 @@ def build() -> Controller:
     ctl.rt["1c:53:f9:16:66:68"].yt_warn = False
     ctl.rt["c8:1f:e8:59:40:eb"].yt_warn = True  # show the recognition warning
     ctl.sync()
+    # Sample viewing history (today and earlier in the week).
+    day, yt, h = ctl.st.day_key, "com.google.android.youtube.tv", ctl.history
+    tv_mac, box_mac = "1c:53:f9:16:66:68", "c8:1f:e8:59:40:eb"
+    for d, mac, pkg, ch, title, secs in [
+        (day, tv_mac, yt, "台南Josh", "季後挑戰賽預測！中信有1勝優勢就穩了嗎？", 1820),
+        (day, tv_mac, yt, "台南Josh", "統一雙王牌能不能扳回劣勢？", 950),
+        (day, tv_mac, yt, "蔡阿嘎", "開箱最新遊戲機", 1300),
+        (day, tv_mac, "com.spotify.tv.android", "老師不正經", "《EP198｜老師，悅讀越奇怪！》霸王壞壞鵝", 2400),
+        (day, box_mac, "com.google.android.youtube.tvkids", "寶寶巴士", "交通工具兒歌", 3100),
+        (day_minus(day, 3), tv_mac, yt, "這群人", "上週的影片", 2200),
+    ]:
+        h.add(d, mac, pkg, ch, title, secs, time.time())
+    ctl.rt[tv_mac].now_playing = [{"package": yt, "state": "playing", "title": "季後挑戰賽預測！", "artist": "台南Josh"}]
+    ctl.rt[tv_mac].now_playing_at = time.time() + 10**6  # keep it shown in the preview
     return ctl
 
 
@@ -81,6 +96,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         with lock:
+            if self.path.startswith("/api/history"):
+                from urllib.parse import parse_qs, urlparse
+                q = parse_qs(urlparse(self.path).query)
+                return self._json(200, ctl.watch_history(int(q.get("days", ["1"])[0]), q.get("mac", [""])[0]))
             if self.path == "/":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")

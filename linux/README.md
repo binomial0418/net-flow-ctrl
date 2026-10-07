@@ -63,6 +63,15 @@ iPhone 也可以連電視那台 AP，一起管控 YouTube，同時照常使用�
 - 去程（VM → NAS、HomePod）直接送達，回程經過 RT2600ac 的靜態路由（非對稱路由）。若 RT2600ac 的防火牆丟棄這類封包，電視看 NAS 會中斷——加好路由、更新 VM 後要實測。
 - avahi 的 mDNS 互轉偶爾會讓 Apple 裝置看到自己的名字而自動改名（例如「iPhone (2)」），這是 avahi reflector 的已知現象。附帶效果：家用網路上的手機也能找到並投放到電視。
 
+## 正在播放與觀看記錄
+
+電視裝了 [NetFlow TV App](../tvapp/) 後，會把正在播放的內容（App、標題、作者——YouTube 是**頻道名稱**、播放狀態）回報到 `POST /api/nowplaying`：
+
+- 設定頁在裝置名稱下顯示「▶ 標題 — 頻道」；VM 日誌（`journalctl -u netflow`）記錄每次換片。
+- **觀看記錄**：每秒檢查一次，裝置的最新回報（90 秒內）是「播放中」就記 1 秒，依邏輯日（05:00 換日）、裝置、App、頻道、影片累計。暫停不算。存在 `/var/lib/netflow/history.db`（SQLite），每分鐘寫入一次，保留 90 天（`history_keep_days`）。
+- 設定頁的「觀看記錄」卡片可選期間（今天／7／30／90 天）與裝置，列出各頻道時間，點開看影片清單。API：`GET /api/history?days=7&mac=AA:BB:…`。
+- 不提供媒體資訊的 App（例如 Hami Video）看不到；主程式重啟後最多約一分鐘（等下一次回報）不會記到。
+
 ## 與 ESP32 版的差異
 
 | 項目 | ESP32 版 | Linux 版 |

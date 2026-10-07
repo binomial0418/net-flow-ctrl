@@ -74,6 +74,16 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   </div>
   <div class="row"><button class="sec" id="resetU">立即重置今日時數</button></div>
 </div>
+
+<div class="card">
+  <h2>觀看記錄</h2>
+  <div class="grid">
+    <div><label>期間</label><select id="hDays"><option value="1">今天</option><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option></select></div>
+    <div><label>裝置</label><select id="hMac"><option value="">全部裝置</option></select></div>
+  </div>
+  <div id="hist" style="margin-top:12px"></div>
+  <div class="hint">由電視上的 NetFlow TV App 回報，只計算「播放中」的時間；不提供播放資訊的 App（例如 Hami Video）不會出現。點頻道可展開影片。</div>
+</div>
 </div>
 
 <dialog id="dlg"><form method="dialog" class="dlg">
@@ -234,7 +244,33 @@ $('resetU').onclick=async()=>{
   if(!confirm('立即將所有裝置的今日已用時數歸零？'))return;
   if(await jpost('/api/reset-usage',{})){toast('已重置');loadDevs()}
 };
-function tick(){loadStatus();loadDevs()}
-tick();setInterval(tick,5000);
+const ymd=k=>String(k).replace(/^(\d{4})(\d\d)(\d\d)$/,'$2/$3');
+async function loadHist(){
+  const days=$('hDays').value,mac=$('hMac').value;
+  const h=await jget('/api/history?days='+days+(mac?'&mac='+encodeURIComponent(mac):''));
+  const range=h.since===h.until?ymd(h.until):ymd(h.since)+'–'+ymd(h.until);
+  if(!h.devices.length){$('hist').innerHTML='<div class="hint">'+range+' 沒有觀看記錄</div>';return}
+  $('hist').innerHTML=h.devices.map(d=>{
+    const top=d.channels.length?d.channels[0].seconds:1;
+    return '<div style="margin:6px 0 14px"><b>'+esc(d.name)+'</b> <span class="hint">'+range+' 共 '+dur(d.seconds)+'</span>'+
+      '<div class="tbl"><table style="min-width:0"><tbody>'+d.channels.map((c,i)=>{
+        const id='ht'+d.mac.replace(/:/g,'')+i;
+        return '<tr style="cursor:pointer" onclick="const e=document.getElementById(\''+id+'\');e.style.display=e.style.display?\'\':\'none\'">'+
+          '<td style="width:40%"><b>'+esc(c.channel||'（未知頻道）')+'</b><div class="hint">'+esc(c.app)+' · '+c.titles.length+' 部</div></td>'+
+          '<td style="width:20%">'+dur(c.seconds)+'</td>'+
+          '<td><div class="bar"><i style="width:'+Math.max(2,c.seconds/top*100)+'%"></i></div></td></tr>'+
+          '<tr id="'+id+'" style="display:none"><td colspan="3" style="white-space:normal">'+
+          c.titles.map(t=>'<div class="hint">'+esc(t.title)+' · '+dur(t.seconds)+'</div>').join('')+'</td></tr>';
+      }).join('')+'</tbody></table></div></div>';
+  }).join('');
+}
+function fillHistDevices(){
+  const sel=$('hMac'),cur=sel.value;
+  sel.innerHTML='<option value="">全部裝置</option>'+devs.map(d=>'<option value="'+esc(d.mac)+'">'+esc(d.name)+'</option>').join('');
+  sel.value=cur;
+}
+$('hDays').onchange=loadHist;$('hMac').onchange=loadHist;
+function tick(){loadStatus();loadDevs().then(fillHistDevices)}
+tick();loadHist();setInterval(tick,5000);setInterval(loadHist,30000);
 </script>
 </body></html>

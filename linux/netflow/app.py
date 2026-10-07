@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import clients, dnsmsg, rules, store
+from .history import History, day_minus, summarise
 from .model import FULL_BLOCK, TIME_CUT, YT_LIMIT, DeviceRule, Reason
 from .nft import Policy
 from .notifier import Notice
@@ -22,6 +23,9 @@ log = logging.getLogger(__name__)
 USAGE_SAVE_SEC = 60  # periodic checkpoint of the usage counters
 MAX_VIDEO_PAIRS = 4096  # learned (client, video address) pairs kept at most
 NOW_PLAYING_STALE_SEC = 180  # the app reports every minute; older means it is gone
+# Viewing history counts a second only while the last report is this fresh: the
+# app reports every minute, so a TV switched off mid-video stops counting soon.
+WATCH_FRESH_SEC = 90
 ONLINE_GRACE_SEC = 120  # recent traffic keeps a device "online" past its neighbour entry
 
 # YouTube recognition health. Recognition hangs on seeing the DNS lookups; a
@@ -47,6 +51,9 @@ class Conf:
     state_path: str = "/var/lib/netflow/state.json"
     leases_path: str = "/var/lib/misc/dnsmasq.leases"
     max_devices: int = 64
+    # Viewing history (history.py); empty path: history.db next to the state file.
+    history_path: str = ""
+    history_keep_days: int = 90
     # Should YouTube move, these can be overridden without touching the code.
     youtube_domains: List[str] = field(default_factory=lambda: list(dnsmsg.YOUTUBE_DOMAINS))
     video_domains: List[str] = field(default_factory=lambda: list(dnsmsg.VIDEO_DOMAINS))
@@ -189,6 +196,9 @@ class Controller:
         self._last_save = time.monotonic()
         self._last_video_sync = 0.0  # 0: restore the saved pairs on the first tick
         self.outbox: List[Notice] = []  # reminders for the main loop to deliver
+        self.history = History(Path(conf.history_path or Path(conf.state_path).with_name("history.db")))
+        if self.st.day_key:
+            self.history.prune(day_minus(self.st.day_key, conf.history_keep_days - 1))
 
     # ------------------------------------------------------------- helpers --
 
@@ -202,6 +212,7 @@ class Controller:
 
     def save(self) -> None:
         store.save(Path(self.conf.state_path), self.st)
+        self.history.flush()
         self._last_save = time.monotonic()
 
     def is_yt_blocked(self, client_ip: str) -> bool:
@@ -233,6 +244,7 @@ class Controller:
         self._refresh_clients()
         self._check_daily_reset(now)
         self._collect_and_accrue()
+        self._accrue_watch()
         self.sync()  # after accruing, so a device that just ran out is cut this tick
         self._check_notices(now)
         if time.monotonic() - self._last_video_sync >= self.conf.video_resync_sec or not self._last_video_sync:
@@ -281,7 +293,32 @@ class Controller:
             self.save()
         elif key != self.st.day_key:
             self.st.day_key = key
+            self.history.prune(day_minus(key, self.conf.history_keep_days - 1))
             self.reset_usage()
+
+    def _accrue_watch(self) -> None:
+        """One second of viewing for every device whose last report, still
+        fresh, has something playing. Paused does not count."""
+        if not (self.time_valid and self.st.day_key):
+            return
+        now = time.time()
+        for mac, rt in self.rt.items():
+            if now - rt.now_playing_at >= WATCH_FRESH_SEC:
+                continue
+            p = _playing(rt.now_playing)
+            if p and p.get("state") == "playing" and p.get("title"):
+                self.history.add(self.st.day_key, mac, p.get("package", ""), p.get("artist") or "",
+                                 p["title"], 1, now)
+
+    def watch_history(self, days: int = 1, mac: str = "") -> Dict[str, Any]:
+        """Viewing over the last `days` logical days (1 = today), per device
+        and channel, optionally for one device."""
+        days = max(1, min(self.conf.history_keep_days, int(days)))
+        today = self.st.day_key or rules.day_key(self.clock(), self.st.cfg.reset_min)
+        since = day_minus(today, days - 1)
+        rows = self.history.query(since, norm_mac(mac) if mac else None)
+        names = {m: d.name for m, d in self.st.devices.items()}
+        return {"since": since, "until": today, "devices": summarise(rows, names)}
 
     def _collect_and_accrue(self) -> None:
         d = self.deltas.update(self.nft.counters())

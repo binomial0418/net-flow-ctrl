@@ -483,6 +483,67 @@ class NowPlaying(unittest.TestCase):
         self.assertNotIn("positionMs", np)
 
 
+class WatchHistory(unittest.TestCase):
+    YT = "com.google.android.youtube.tv"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.h = Harness(Path(self._tmp.name))
+        self.h.tick()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def play(self, title, channel, state="playing", pkg=None):
+        self.h.ctl.now_playing(TV_IP, {"sessions": [{"package": pkg or self.YT, "state": state, "title": title, "artist": channel}]})
+
+    def hist(self, days=1, mac=""):
+        return self.h.ctl.watch_history(days, mac)["devices"]
+
+    def test_counts_playing_seconds_by_channel_and_title(self):
+        self.play("影片A", "台南Josh")
+        self.h.tick(30)
+        self.play("影片B", "台南Josh")
+        self.h.tick(20)
+        self.play("Song", "某歌手", pkg="com.spotify.tv.android")
+        self.h.tick(10)
+        dev = self.hist()[0]
+        self.assertEqual(dev["seconds"], 60)
+        josh, song = dev["channels"]
+        self.assertEqual((josh["channel"], josh["app"], josh["seconds"]), ("台南Josh", "YouTube", 50))
+        self.assertEqual([t["title"] for t in josh["titles"]], ["影片A", "影片B"])
+        self.assertEqual((song["app"], song["seconds"]), ("Spotify", 10))
+
+    def test_paused_and_stale_do_not_count(self):
+        self.play("影片A", "ch", state="paused")
+        self.h.tick(30)
+        self.assertEqual(self.hist(), [])
+        self.play("影片A", "ch")
+        self.h.ctl.rt[TV].now_playing_at -= 120  # the app stopped reporting (TV off)
+        self.h.tick(30)
+        self.assertEqual(self.hist(), [])
+
+    def test_days_and_device_filter_and_retention(self):
+        hist = self.h.ctl.history
+        day = self.h.ctl.st.day_key
+        hist.add(20260101, TV, self.YT, "old", "t", 100, 0)  # far past the 90 days
+        hist.add(day - 1 if day % 100 > 1 else day, TV, self.YT, "yesterday", "t", 50, 0)
+        hist.add(day, "aa:bb:cc:dd:ee:ff", self.YT, "other device", "t", 5, 0)
+        self.assertEqual(sum(d["seconds"] for d in self.hist(days=1)), 5 + (50 if day % 100 == 1 else 0))
+        self.assertEqual(self.hist(days=1, mac="AA:BB:CC:DD:EE:FF")[0]["seconds"], 5)
+        self.assertNotIn("old", [c["channel"] for d in self.hist(days=90) for c in d["channels"]])
+        self.h.ctl.save()
+        self.h.ctl = self.h.make()  # prunes on start
+        self.assertEqual([r for r in hist.query(0) if r["channel"] == "old"], [])
+
+    def test_survives_restart(self):
+        self.play("影片A", "台南Josh")
+        self.h.tick(15)
+        self.h.ctl.save()
+        self.h.ctl = self.h.make()
+        self.assertEqual(self.hist()[0]["seconds"], 15)
+
+
 class Deltas(unittest.TestCase):
     def test_baseline_new_and_recreated(self):
         c = CounterDeltas()

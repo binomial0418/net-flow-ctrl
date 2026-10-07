@@ -53,6 +53,14 @@ def make_app(ctl: Controller) -> web.Application:
             return web.Response(status=400, text=f"bad request: {e}")
         return web.json_response({"ok": True})
 
+    async def history(req: web.Request) -> web.Response:
+        try:
+            return web.json_response(ctl.watch_history(int(req.query.get("days", "1")), req.query.get("mac", "")))
+        except ApiError as e:
+            return web.Response(status=e.status, text=e.text)
+        except ValueError as e:
+            return web.Response(status=400, text=f"bad request: {e}")
+
     async def reset_usage(_req: web.Request) -> web.Response:
         ctl.reset_usage()
         return web.json_response({"ok": True})
@@ -69,6 +77,7 @@ def make_app(ctl: Controller) -> web.Application:
     app.router.add_post("/api/extend", poster(ctl.extend))
     app.router.add_post("/api/notify-test", poster(ctl.notify_test))
     app.router.add_post("/api/nowplaying", now_playing)
+    app.router.add_get("/api/history", history)
     app.router.add_post("/api/reset-usage", reset_usage)
     app.router.add_route("*", "/{tail:.*}", elsewhere)
     return app
