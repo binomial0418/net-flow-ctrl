@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TV launcher banner (320x180 dp area): the app icon on a plain tile. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#1F2227"/>
+            <size android:width="320dp" android:height="180dp"/>
+        </shape>
+    </item>
+    <item android:drawable="@mipmap/ic_launcher" android:gravity="center"
+        android:width="96dp" android:height="96dp"/>
+</layer-list>

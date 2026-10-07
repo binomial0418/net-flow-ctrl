@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 USAGE_SAVE_SEC = 60  # periodic checkpoint of the usage counters
 MAX_VIDEO_PAIRS = 4096  # learned (client, video address) pairs kept at most
+NOW_PLAYING_STALE_SEC = 180  # the app reports every minute; older means it is gone
 ONLINE_GRACE_SEC = 120  # recent traffic keeps a device "online" past its neighbour entry
 
 # YouTube recognition health. Recognition hangs on seeing the DNS lookups; a
@@ -107,6 +108,9 @@ class Runtime:
     suspect_sec: int = 0  # consecutive seconds the tell has held
     clear_sec: int = 0  # consecutive seconds it has not
     yt_warn: bool = False
+    # What the device reports it is playing (the NetFlow TV app, tvapp/).
+    now_playing: List[Dict[str, Any]] = field(default_factory=list)
+    now_playing_at: float = 0.0  # wall clock of the last report
     # Reminders (see _check_notices). Not persisted: the first tick after a
     # start only primes them, so a restart never replays a reminder.
     notice_primed: bool = False
@@ -459,6 +463,37 @@ class Controller:
         out, self.outbox = self.outbox, []
         return out
 
+    # ----------------------------------------------------------- now playing --
+
+    def now_playing(self, client_ip: str, body: Dict[str, Any]) -> None:
+        """A report from the NetFlow TV app: the media sessions on the device,
+        each with package, title, artist (the channel, for YouTube), state."""
+        mac = self.ip_to_mac.get(client_ip)
+        if mac not in self.rt:
+            raise ApiError(404, "unknown device")
+        sessions = body.get("sessions")
+        if not isinstance(sessions, list):
+            raise ApiError(400, "bad sessions")
+        clean = []
+        for s in sessions[:16]:
+            if not isinstance(s, dict):
+                continue
+            item = {k: str(s[k])[:200] for k in ("package", "title", "artist", "album", "mediaId", "state") if s.get(k)}
+            for k in ("positionMs", "durationMs"):
+                if isinstance(s.get(k), int):
+                    item[k] = s[k]
+            clean.append(item)
+        rt = self.rt[mac]
+        before = _playing(rt.now_playing)
+        rt.now_playing, rt.now_playing_at = clean, time.time()
+        after = _playing(clean)
+        # A new video reports "playing" a moment before its title: wait for it.
+        if after and after.get("title") and after != before:
+            log.info(
+                "now playing on %s: %s — %s (%s)",
+                self.st.devices[mac].name, after.get("title", "?"), after.get("artist", "?"), after.get("package", "?"),
+            )
+
     def notify_test(self, body: Dict[str, Any]) -> None:
         d = self._device(body)
         rt = self.rt[d.mac]
@@ -518,6 +553,8 @@ class Controller:
                     "blockYoutube": d.block_youtube,
                     "ytOnlyLimit": d.yt_only_limit,
                     "ytDetectWarn": rt.yt_warn,
+                    # The playing session, if the device runs the NetFlow TV app.
+                    "nowPlaying": _playing(rt.now_playing) if time.time() - rt.now_playing_at < NOW_PLAYING_STALE_SEC else None,
                     "notifyEnabled": d.notify_enabled,
                     "notifyWarnMin": d.notify_warn_min,
                     "up": d.up_bytes,
@@ -584,6 +621,14 @@ class Controller:
             d.extend_day = self.st.day_key
         self.save()
         self.sync()
+
+
+def _playing(sessions: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The session worth showing: one that is playing, else none."""
+    for s in sessions:
+        if s.get("state") in ("playing", "buffering"):
+            return s
+    return None
 
 
 def _if_addr(ifname: str) -> str:

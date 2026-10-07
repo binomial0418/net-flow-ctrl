@@ -441,6 +441,48 @@ class VideoPairs(unittest.TestCase):
         self.assertNotIn((TV_IP, "1.1.1.1"), ctl.st.video_pairs)
 
 
+class NowPlaying(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.h = Harness(Path(self._tmp.name))
+        self.h.tick()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_report_shows_the_playing_session(self):
+        body = {"sessions": [
+            {"package": "com.spotify.tv.android", "state": "paused", "title": "EP198", "artist": "老師不正經"},
+            {"package": "com.google.android.youtube.tv", "state": "playing", "title": "影片", "artist": "某頻道", "positionMs": 1234},
+        ]}
+        with self.assertLogs("netflow.app", "INFO") as cm:
+            self.h.ctl.now_playing(TV_IP, body)
+        self.assertIn("影片 — 某頻道", cm.output[0])
+        d = self.h.ctl.devices()["devices"][0]
+        self.assertEqual(d["nowPlaying"]["artist"], "某頻道")
+        self.assertEqual(d["nowPlaying"]["positionMs"], 1234)
+
+    def test_nothing_playing(self):
+        self.h.ctl.now_playing(TV_IP, {"sessions": [{"package": "x", "state": "paused", "title": "t"}]})
+        self.assertIsNone(self.h.ctl.devices()["devices"][0]["nowPlaying"])
+
+    def test_stale_report_hidden(self):
+        self.h.ctl.now_playing(TV_IP, {"sessions": [{"package": "x", "state": "playing", "title": "t"}]})
+        self.h.ctl.rt[TV].now_playing_at -= 600
+        self.assertIsNone(self.h.ctl.devices()["devices"][0]["nowPlaying"])
+
+    def test_rejects_unknown_client_and_bad_body(self):
+        with self.assertRaises(ApiError) as e:
+            self.h.ctl.now_playing("192.168.50.250", {"sessions": []})
+        self.assertEqual(e.exception.status, 404)
+        with self.assertRaises(ApiError):
+            self.h.ctl.now_playing(TV_IP, {"sessions": "nope"})
+        self.h.ctl.now_playing(TV_IP, {"sessions": [{"package": "x" * 999, "state": "playing", "positionMs": "bad"}, 5]})
+        np = self.h.ctl.devices()["devices"][0]["nowPlaying"]
+        self.assertEqual(len(np["package"]), 200)
+        self.assertNotIn("positionMs", np)
+
+
 class Deltas(unittest.TestCase):
     def test_baseline_new_and_recreated(self):
         c = CounterDeltas()

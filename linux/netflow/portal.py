@@ -40,6 +40,19 @@ def make_app(ctl: Controller) -> web.Application:
 
         return handler
 
+    async def now_playing(req: web.Request) -> web.Response:
+        # Identified by its address: only a device on the TV network can report.
+        try:
+            body = json.loads(await req.text() or "{}")
+            if not isinstance(body, dict):
+                raise ApiError(400, "bad json")
+            ctl.now_playing(req.remote or "", body)
+        except ApiError as e:
+            return web.Response(status=e.status, text=e.text)
+        except (ValueError, TypeError) as e:
+            return web.Response(status=400, text=f"bad request: {e}")
+        return web.json_response({"ok": True})
+
     async def reset_usage(_req: web.Request) -> web.Response:
         ctl.reset_usage()
         return web.json_response({"ok": True})
@@ -55,6 +68,7 @@ def make_app(ctl: Controller) -> web.Application:
     app.router.add_post("/api/global", poster(ctl.update_global))
     app.router.add_post("/api/extend", poster(ctl.extend))
     app.router.add_post("/api/notify-test", poster(ctl.notify_test))
+    app.router.add_post("/api/nowplaying", now_playing)
     app.router.add_post("/api/reset-usage", reset_usage)
     app.router.add_route("*", "/{tail:.*}", elsewhere)
     return app
