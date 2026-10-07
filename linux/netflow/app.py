@@ -550,7 +550,7 @@ class Controller:
             mono = time.monotonic()
             if rt.ip and mono - rt.shorts_notice_at >= SHORTS_NOTICE_SEC:
                 rt.shorts_notice_at = mono
-                self.outbox.append(Notice(rt.ip, "Shorts 已封鎖", f"{dev.name} 不能看 YouTube Shorts"))
+                self.outbox.append(Notice(rt.ip, "短影音已封鎖", "不可以看抖音/短影音喲"))
         return {"blockShorts": dev.block_shorts}
 
     def notify_test(self, body: Dict[str, Any]) -> None:

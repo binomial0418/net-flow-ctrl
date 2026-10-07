@@ -75,7 +75,7 @@ iPhone 也可以連電視那台 AP，一起管控 YouTube，同時照常使用�
 
 ### 封鎖 YouTube Shorts
 
-裝置設定勾選「封鎖 YouTube Shorts」後，由電視上的 NetFlow TV App 直接暫停 Shorts，VM 透過 TvOverlay 顯示「Shorts 已封鎖」（每台每分鐘最多一次）。
+裝置設定勾選「封鎖 YouTube Shorts」後，由電視上的 NetFlow TV App 直接暫停 Shorts，VM 透過 TvOverlay 顯示「短影音已封鎖／不可以看抖音/短影音喲」（每台每分鐘最多一次）。
 
 - **判斷方式**：YouTube／YouTube Kids「播放中但沒有標題」持續 2.5 秒。一般影片開始播放約 1 秒內就會有標題，Shorts 一直沒有。其他 App 完全不檢查。
 - **設定傳遞**：App 每次回報時，VM 在回應裡附上 `{"policy": {"blockShorts": …}}`，App 記下來後在電視端自行判斷、暫停。改設定後最晚 60 秒（下一次回報）生效。

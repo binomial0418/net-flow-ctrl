@@ -579,7 +579,7 @@ class BlockShorts(unittest.TestCase):
         self.report(blockedShorts=True)
         self.report(blockedShorts=True)
         out = self.h.ctl.drain_outbox()
-        self.assertEqual([n.big for n in out], ["Shorts 已封鎖"])
+        self.assertEqual([(n.big, n.sub) for n in out], [("短影音已封鎖", "不可以看抖音/短影音喲")])
         self.assertEqual(out[0].ip, TV_IP)
         self.h.ctl.rt[TV].shorts_notice_at -= 61
         self.report(blockedShorts=True)
