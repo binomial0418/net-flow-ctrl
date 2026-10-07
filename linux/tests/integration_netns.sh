@@ -39,9 +39,13 @@ ip -n nf-rtr addr add 10.99.0.2/24 dev ens18; ip -n nf-rtr link set ens18 up
 ip -n nf-rtr addr add 192.168.50.1/24 dev ens19; ip -n nf-rtr link set ens19 up
 ip -n nf-rtr route add default via 10.99.0.1
 rtr sysctl -qw net.ipv4.ip_forward=1
+# nf-wan plays the internet and the home LAN at once: 10.99.0.0/24 is the home
+# LAN, with the RT2600ac's static route back to the TV network.
+ip -n nf-wan route add 192.168.50.0/24 via 10.99.0.2
+sed 's|^define HOME_NET = .*|define HOME_NET = 10.99.0.0/24|' deploy/nftables.conf > $T/nftables.conf
 ip -n nf-tv addr add 192.168.50.101/24 dev eth0; ip -n nf-tv link set eth0 up
 ip -n nf-tv route add default via 192.168.50.1
-rtr nft -f deploy/nftables.conf || { echo "ruleset failed to load"; exit 1; }
+rtr nft -f $T/nftables.conf || { echo "ruleset failed to load"; exit 1; }
 
 ip netns exec nf-wan python3 tests/fakenet.py serve & pids+=($!)
 cat > $T/conf.json <<EOF
@@ -79,6 +83,14 @@ printf '%s\n' "destroy element inet netflow ytvideo { 192.168.50.101 . 173.194.9
 tv get http://173.194.9.9/ >/dev/null
 check "traffic renews the pair" "*173.194.9.9 timeout 30s expires 5[0-9]m*" "$(rtr nft list set inet netflow ytvideo | tr -d '\n')"
 
+echo "home LAN routed, not NATed (AirPlay to a HomePod)"
+check "internet NATed" "10.99.0.2" "$(tv fetch http://93.184.0.10/whoami)"
+check "home LAN sees the client" "192.168.50.101" "$(tv fetch http://10.99.0.1/whoami)"
+ip netns exec nf-tv python3 tests/fakenet.py listen 7000 & pids+=($!)
+sleep 0.5
+check "home LAN connects in" "OPEN" "$(ip netns exec nf-wan python3 tests/fakenet.py connect 192.168.50.101 7000)"
+check "internet cannot" "TIMEOUT" "$(ip netns exec nf-wan python3 tests/fakenet.py connect 192.168.50.101 7000 93.184.0.10)"
+
 echo "encrypted DNS refused"
 check "DoT 853" "REFUSED" "$(tv connect 9.9.9.9 853)"
 check "DoH 8.8.8.8:443" "REFUSED" "$(tv connect 8.8.8.8 443)"
@@ -111,7 +123,7 @@ kill -TERM "${pids[1]}"; sleep 2
 check "state saved" "*manual_block\": true*" "$(tr -d '\n' < $T/state.json)"
 
 echo "learned video addresses survive a ruleset reload and a restart"
-rtr nft -f deploy/nftables.conf  # what a reload of nftables.service does: every set emptied
+rtr nft -f $T/nftables.conf  # what a reload of nftables.service does: every set emptied
 check "set emptied by the reload" "*timeout 1h	}}" "$(rtr nft list set inet netflow ytvideo | tr -d '\n')"
 ip netns exec nf-rtr env PYTHONPATH=. python3 -m netflow --config $T/conf.json >>$T/daemon.log 2>&1 & pids+=($!)
 sleep 3

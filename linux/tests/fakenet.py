@@ -60,7 +60,8 @@ def serve():
 
     class Http(BaseHTTPRequestHandler):
         def do_GET(self):
-            body = b"x" * (2 * 1024 * 1024)
+            # /whoami: the source address the server sees (NATed or not).
+            body = self.client_address[0].encode() if self.path == "/whoami" else b"x" * (2 * 1024 * 1024)
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -102,9 +103,29 @@ def get(url):
         return f"FAIL {type(e).__name__}"
 
 
-def connect(host, port):
+def fetch(url):
+    try:
+        with urllib.request.urlopen(url, timeout=4) as r:
+            return r.read().decode()
+    except Exception as e:
+        return f"FAIL {type(e).__name__}"
+
+
+def listen(port):
+    """Accept and drop connections, as a service on the TV would."""
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("0.0.0.0", int(port)))
+    s.listen()
+    while True:
+        s.accept()[0].close()
+
+
+def connect(host, port, src=None):
     s = socket.socket()
     s.settimeout(3)
+    if src:
+        s.bind((src, 0))
     try:
         s.connect((host, int(port)))
         return "OPEN"
@@ -131,6 +152,10 @@ if __name__ == "__main__":
         print(resolve(*args))
     elif cmd == "get":
         print(get(*args))
+    elif cmd == "fetch":
+        print(fetch(*args))
+    elif cmd == "listen":
+        listen(*args)
     elif cmd == "connect":
         print(connect(*args))
     elif cmd == "api":
