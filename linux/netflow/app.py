@@ -29,6 +29,7 @@ WATCH_FRESH_SEC = 90
 YOUTUBE_PACKAGES = ("com.google.android.youtube.tv", "com.google.android.youtube.tvkids")
 UNTITLED_YT = "Shorts／無標題"
 UNTITLED = "（無標題）"
+SHORTS_NOTICE_SEC = 60  # at most one "Shorts blocked" notice per device per minute
 ONLINE_GRACE_SEC = 120  # recent traffic keeps a device "online" past its neighbour entry
 
 # YouTube recognition health. Recognition hangs on seeing the DNS lookups; a
@@ -121,6 +122,7 @@ class Runtime:
     # What the device reports it is playing (the NetFlow TV app, tvapp/).
     now_playing: List[Dict[str, Any]] = field(default_factory=list)
     now_playing_at: float = 0.0  # wall clock of the last report
+    shorts_notice_at: float = -1e9  # monotonic time of the last "Shorts blocked" notice
     # Reminders (see _check_notices). Not persisted: the first tick after a
     # start only primes them, so a restart never replays a reminder.
     notice_primed: bool = False
@@ -512,9 +514,10 @@ class Controller:
 
     # ----------------------------------------------------------- now playing --
 
-    def now_playing(self, client_ip: str, body: Dict[str, Any]) -> None:
+    def now_playing(self, client_ip: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """A report from the NetFlow TV app: the media sessions on the device,
-        each with package, title, artist (the channel, for YouTube), state."""
+        each with package, title, artist (the channel, for YouTube), state.
+        Returns the device's policy, which the app enforces on its own."""
         mac = self.ip_to_mac.get(client_ip)
         if mac not in self.rt:
             raise ApiError(404, "unknown device")
@@ -534,12 +537,21 @@ class Controller:
         before = _playing(rt.now_playing)
         rt.now_playing, rt.now_playing_at = clean, time.time()
         after = _playing(clean)
+        dev = self.st.devices[mac]
         # A new video reports "playing" a moment before its title: wait for it.
         if after and after.get("title") and after != before:
             log.info(
                 "now playing on %s: %s — %s (%s)",
-                self.st.devices[mac].name, after.get("title", "?"), after.get("artist", "?"), after.get("package", "?"),
+                dev.name, after.get("title", "?"), after.get("artist", "?"), after.get("package", "?"),
             )
+        if body.get("blockedShorts") is True:
+            # The app just paused a Short: say why, at most once a minute.
+            log.info("blocked a YouTube Short on %s", dev.name)
+            mono = time.monotonic()
+            if rt.ip and mono - rt.shorts_notice_at >= SHORTS_NOTICE_SEC:
+                rt.shorts_notice_at = mono
+                self.outbox.append(Notice(rt.ip, "Shorts 已封鎖", f"{dev.name} 不能看 YouTube Shorts"))
+        return {"blockShorts": dev.block_shorts}
 
     def notify_test(self, body: Dict[str, Any]) -> None:
         d = self._device(body)
@@ -604,6 +616,7 @@ class Controller:
                     "nowPlaying": _playing(rt.now_playing) if time.time() - rt.now_playing_at < NOW_PLAYING_STALE_SEC else None,
                     "notifyEnabled": d.notify_enabled,
                     "notifyWarnMin": d.notify_warn_min,
+                    "blockShorts": d.block_shorts,
                     "up": d.up_bytes,
                     "down": d.down_bytes,
                     # extendUntil: the target if the extension is for today, else 0.
@@ -639,6 +652,7 @@ class Controller:
             d.yt_only_limit = bool(body.get("ytOnlyLimit", False))
             d.notify_enabled = bool(body.get("notifyEnabled", d.notify_enabled))
             d.notify_warn_min = max(1, min(120, int(body.get("notifyWarnMin", d.notify_warn_min))))
+            d.block_shorts = bool(body.get("blockShorts", d.block_shorts))
         self.save()
         self.sync()
 

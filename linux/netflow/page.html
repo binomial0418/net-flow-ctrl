@@ -103,6 +103,8 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   <div class="hint">勾選後，超出時段或時數用盡時<b>只中斷 YouTube</b>，其他網路照常可用。</div>
   <div class="chk"><input type="checkbox" id="dYtBlk"><label for="dYtBlk" style="margin:0">封鎖 YouTube</label></div>
   <div class="hint">任何時候都不可連 YouTube（本日延長也不解除）。</div>
+  <div class="chk"><input type="checkbox" id="dShorts"><label for="dShorts" style="margin:0">封鎖 YouTube Shorts</label></div>
+  <div class="hint">Shorts 一播放就暫停，並在電視上顯示提示；一般影片照常。需在電視安裝 NetFlow TV App。</div>
   <div class="chk"><input type="checkbox" id="dNotify"><label for="dNotify" style="margin:0">時間提醒通知</label></div>
   <div class="grid">
     <div><label>提前幾分鐘提醒</label><input id="dNotifyMin" type="number" min="1" max="120"></div>
@@ -199,7 +201,7 @@ window.edit=i=>{
   $('dWinS').value=hhmm(cur.winStart);$('dWinE').value=hhmm(cur.winEnd);
   $('dQuoEn').checked=cur.quotaEnabled;$('dQuo').value=cur.quotaMin;
   $('dYtOnly').checked=cur.ytOnlyLimit;$('dYtBlk').checked=cur.blockYoutube;
-  $('dNotify').checked=cur.notifyEnabled;$('dNotifyMin').value=cur.notifyWarnMin;
+  $('dNotify').checked=cur.notifyEnabled;$('dNotifyMin').value=cur.notifyWarnMin;$('dShorts').checked=cur.blockShorts;
   $('dManual').checked=cur.manualBlock;$('dlg').showModal();
 };
 $('dCancel').onclick=()=>$('dlg').close();
@@ -208,7 +210,7 @@ $('dSave').onclick=async()=>{
     winEnabled:$('dWinEn').checked,winStart:toMin($('dWinS').value),winEnd:toMin($('dWinE').value),
     quotaEnabled:$('dQuoEn').checked,quotaMin:+$('dQuo').value,manualBlock:$('dManual').checked,
     ytOnlyLimit:$('dYtOnly').checked,blockYoutube:$('dYtBlk').checked,
-    notifyEnabled:$('dNotify').checked,notifyWarnMin:+$('dNotifyMin').value});
+    notifyEnabled:$('dNotify').checked,notifyWarnMin:+$('dNotifyMin').value,blockShorts:$('dShorts').checked});
   if(r){$('dlg').close();toast('已儲存');loadDevs()}
 };
 $('dNotifyTest').onclick=async()=>{

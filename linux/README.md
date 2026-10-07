@@ -73,6 +73,14 @@ iPhone 也可以連電視那台 AP，一起管控 YouTube，同時照常使用�
 - **YouTube Shorts 沒有標題與頻道**：YouTube 電視版播 Shorts 時只回報「播放中」，標題、頻道都是空的（畫面文字也讀不到）。這類時間記在「Shorts／無標題」底下（廣告可能也算在內）；其他 App 播放中但沒標題的，記在「（無標題）」。
 - 不提供媒體資訊的 App（例如 Hami Video）看不到；主程式重啟後最多約一分鐘（等下一次回報）不會記到。
 
+### 封鎖 YouTube Shorts
+
+裝置設定勾選「封鎖 YouTube Shorts」後，由電視上的 NetFlow TV App 直接暫停 Shorts，VM 透過 TvOverlay 顯示「Shorts 已封鎖」（每台每分鐘最多一次）。
+
+- **判斷方式**：YouTube／YouTube Kids「播放中但沒有標題」持續 2.5 秒。一般影片開始播放約 1 秒內就會有標題，Shorts 一直沒有。其他 App 完全不檢查。
+- **設定傳遞**：App 每次回報時，VM 在回應裡附上 `{"policy": {"blockShorts": …}}`，App 記下來後在電視端自行判斷、暫停。改設定後最晚 60 秒（下一次回報）生效。
+- **尚未實測**：影片前的**廣告**若也沒有標題會被暫停；**YouTube Kids** 若一律不提供標題，所有 Kids 影片都會被暫停。遇到時調整判斷或把 Kids 移出檢查清單。
+
 ## 與 ESP32 版的差異
 
 | 項目 | ESP32 版 | Linux 版 |

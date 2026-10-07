@@ -29,6 +29,11 @@ import java.util.concurrent.Executors
  * Every media session's metadata (title, artist -- the channel, for YouTube)
  * and playback state is posted as JSON to <server>/api/nowplaying whenever it
  * changes (debounced) and once a minute as a heartbeat.
+ *
+ * The reply carries the device's policy. With "blockShorts" on, YouTube Shorts
+ * are paused here, on the spot: the YouTube TV app plays a Short with no title
+ * or channel, while a regular video has both within about a second of
+ * starting -- so playing-and-untitled for SHORTS_GRACE_MS is taken as a Short.
  */
 class NowPlayingService : NotificationListenerService() {
     private val main = Handler(Looper.getMainLooper())
@@ -80,14 +85,51 @@ class NowPlayingService : NotificationListenerService() {
         for ((token, c) in now) {
             if (token in tracked) continue
             val cb = object : MediaController.Callback() {
-                override fun onMetadataChanged(metadata: MediaMetadata?) = schedule()
-                override fun onPlaybackStateChanged(state: PlaybackState?) = schedule()
+                override fun onMetadataChanged(metadata: MediaMetadata?) { schedule(); checkShorts(c) }
+                override fun onPlaybackStateChanged(state: PlaybackState?) { schedule(); checkShorts(c) }
                 override fun onSessionDestroyed() = schedule()
             }
             c.registerCallback(cb, main)
             tracked[token] = c to cb
+            checkShorts(c)
         }
         schedule()
+    }
+
+    // ------------------------------------------------------------ Shorts --
+
+    private fun blockShorts(): Boolean =
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("block_shorts", false)
+
+    private fun looksLikeShort(c: MediaController): Boolean {
+        if (c.packageName !in YOUTUBE) return false
+        if (c.playbackState?.state != PlaybackState.STATE_PLAYING) return false
+        val md = c.metadata ?: return true
+        return md.getString(MediaMetadata.METADATA_KEY_TITLE).isNullOrEmpty() &&
+            md.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE).isNullOrEmpty()
+    }
+
+    /** If this session looks like a Short, check again after the grace period
+     *  (a regular video gets its title by then) and pause it if it still does. */
+    private fun checkShorts(c: MediaController) {
+        if (!blockShorts() || !looksLikeShort(c)) return
+        main.postDelayed({
+            if (blockShorts() && looksLikeShort(c)) {
+                c.transportControls.pause()
+                Log.i(TAG, "paused a YouTube Short")
+                report(blockedShorts = true)
+            }
+        }, SHORTS_GRACE_MS)
+    }
+
+    private fun applyPolicy(policy: JSONObject?) {
+        policy ?: return
+        val block = policy.optBoolean("blockShorts", false)
+        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (prefs.getBoolean("block_shorts", false) == block) return
+        prefs.edit().putBoolean("block_shorts", block).apply()
+        // Just switched on: a Short may be playing right now.
+        if (block) for ((c, _) in tracked.values) checkShorts(c)
     }
 
     private fun untrackAll() {
@@ -101,13 +143,14 @@ class NowPlayingService : NotificationListenerService() {
         main.postDelayed(reportNow, DEBOUNCE_MS)
     }
 
-    fun report() {
+    fun report(blockedShorts: Boolean = false) {
         val sessions = JSONArray()
         for ((c, _) in tracked.values) sessions.put(describe(c))
         val body = JSONObject()
             .put("version", 1)
             .put("app", packageName)
             .put("sessions", sessions)
+        if (blockedShorts) body.put("blockedShorts", true)
         val server = serverUrl(this)
         net.execute { post("$server/api/nowplaying", body) }
     }
@@ -150,6 +193,11 @@ class NowPlayingService : NotificationListenerService() {
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
             conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             val code = conn.responseCode
+            if (code == 200) {
+                val reply = conn.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+                val policy = runCatching { JSONObject(reply).optJSONObject("policy") }.getOrNull()
+                main.post { applyPolicy(policy) }
+            }
             conn.disconnect()
             prefs.edit()
                 .putLong("last_at", System.currentTimeMillis())
@@ -170,6 +218,8 @@ class NowPlayingService : NotificationListenerService() {
         const val DEFAULT_SERVER = "http://192.168.50.1"
         private const val DEBOUNCE_MS = 1000L
         private const val HEARTBEAT_MS = 60_000L
+        private const val SHORTS_GRACE_MS = 2500L
+        private val YOUTUBE = setOf("com.google.android.youtube.tv", "com.google.android.youtube.tvkids")
 
         /** The bound listener, if any: lets the activity trigger a report. */
         @Volatile

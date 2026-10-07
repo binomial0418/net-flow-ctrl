@@ -46,12 +46,12 @@ def make_app(ctl: Controller) -> web.Application:
             body = json.loads(await req.text() or "{}")
             if not isinstance(body, dict):
                 raise ApiError(400, "bad json")
-            ctl.now_playing(req.remote or "", body)
+            policy = ctl.now_playing(req.remote or "", body)
         except ApiError as e:
             return web.Response(status=e.status, text=e.text)
         except (ValueError, TypeError) as e:
             return web.Response(status=400, text=f"bad request: {e}")
-        return web.json_response({"ok": True})
+        return web.json_response({"ok": True, "policy": policy})
 
     async def history(req: web.Request) -> web.Response:
         try:

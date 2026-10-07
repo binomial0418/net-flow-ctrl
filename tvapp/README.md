@@ -8,6 +8,8 @@ Android 的 `MediaSessionManager` 能讀到各 App 回報的媒體工作階段�
 
 Flutter 畫面（[lib/main.dart](lib/main.dart)）只是狀態頁：權限是否開啟、上次回報結果、目前的媒體，可用遙控器操作。
 
+**封鎖 Shorts**：回報的回應裡帶有 VM 下發的政策（`blockShorts`）。開啟時，YouTube／YouTube Kids「播放中且沒有標題」持續 2.5 秒就用 `transportControls.pause()` 暫停，並立刻回報 `blockedShorts: true`，VM 再顯示提示。
+
 **限制**：只有會回報媒體工作階段的 App 才看得到。YouTube、Spotify 可以；Hami Video 不提供。
 
 ## 建置與安裝

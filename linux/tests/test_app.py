@@ -556,6 +556,41 @@ class WatchHistory(unittest.TestCase):
         self.assertEqual(self.hist()[0]["seconds"], 15)
 
 
+class BlockShorts(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.h = Harness(Path(self._tmp.name))
+        self.h.tick()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def report(self, **extra):
+        return self.h.ctl.now_playing(TV_IP, dict({"sessions": []}, **extra))
+
+    def test_policy_in_the_reply(self):
+        self.assertEqual(self.report(), {"blockShorts": False})
+        self.h.ctl.update_device({"mac": TV, "approved": True, "quotaMin": 480, "blockShorts": True})
+        self.assertEqual(self.report(), {"blockShorts": True})
+        self.assertTrue(self.h.ctl.devices()["devices"][0]["blockShorts"])
+
+    def test_notice_when_the_app_blocked_one_at_most_once_a_minute(self):
+        self.h.ctl.drain_outbox()
+        self.report(blockedShorts=True)
+        self.report(blockedShorts=True)
+        out = self.h.ctl.drain_outbox()
+        self.assertEqual([n.big for n in out], ["Shorts 已封鎖"])
+        self.assertEqual(out[0].ip, TV_IP)
+        self.h.ctl.rt[TV].shorts_notice_at -= 61
+        self.report(blockedShorts=True)
+        self.assertEqual(len(self.h.ctl.drain_outbox()), 1)
+
+    def test_setting_survives_restart(self):
+        self.h.ctl.update_device({"mac": TV, "approved": True, "quotaMin": 480, "blockShorts": True})
+        self.h.ctl = self.h.make()
+        self.assertTrue(self.h.ctl.st.devices[TV].block_shorts)
+
+
 class Deltas(unittest.TestCase):
     def test_baseline_new_and_recreated(self):
         c = CounterDeltas()

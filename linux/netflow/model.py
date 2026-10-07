@@ -61,6 +61,9 @@ class DeviceRule:
     # On-screen reminders through TvOverlay on the device (see notifier.py).
     notify_enabled: bool = False
     notify_warn_min: int = 10  # warn this many minutes before a time limit cuts
+    # Pause YouTube Shorts on the device (enforced by the NetFlow TV app, which
+    # receives this in the reply to its reports).
+    block_shorts: bool = False
 
 
 @dataclass
