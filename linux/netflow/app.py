@@ -26,6 +26,9 @@ NOW_PLAYING_STALE_SEC = 180  # the app reports every minute; older means it is g
 # Viewing history counts a second only while the last report is this fresh: the
 # app reports every minute, so a TV switched off mid-video stops counting soon.
 WATCH_FRESH_SEC = 90
+YOUTUBE_PACKAGES = ("com.google.android.youtube.tv", "com.google.android.youtube.tvkids")
+UNTITLED_YT = "Shorts／無標題"
+UNTITLED = "（無標題）"
 ONLINE_GRACE_SEC = 120  # recent traffic keeps a device "online" past its neighbour entry
 
 # YouTube recognition health. Recognition hangs on seeing the DNS lookups; a
@@ -306,9 +309,16 @@ class Controller:
             if now - rt.now_playing_at >= WATCH_FRESH_SEC:
                 continue
             p = _playing(rt.now_playing)
-            if p and p.get("state") == "playing" and p.get("title"):
-                self.history.add(self.st.day_key, mac, p.get("package", ""), p.get("artist") or "",
-                                 p["title"], 1, now)
+            if p and p.get("state") == "playing":
+                pkg = p.get("package", "")
+                if p.get("title"):
+                    channel, title = p.get("artist") or "", p["title"]
+                else:
+                    # The YouTube TV app reports no title or channel for Shorts
+                    # (ads likely look the same): count the time all the same.
+                    channel = UNTITLED_YT if pkg in YOUTUBE_PACKAGES else UNTITLED
+                    title = UNTITLED
+                self.history.add(self.st.day_key, mac, pkg, channel, title, 1, now)
 
     def watch_history(self, days: int = 1, mac: str = "") -> Dict[str, Any]:
         """Viewing over the last `days` logical days (1 = today), per device

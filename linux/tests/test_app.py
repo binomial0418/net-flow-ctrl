@@ -514,6 +514,18 @@ class WatchHistory(unittest.TestCase):
         self.assertEqual([t["title"] for t in josh["titles"]], ["影片A", "影片B"])
         self.assertEqual((song["app"], song["seconds"]), ("Spotify", 10))
 
+    def test_untitled_still_counts(self):
+        # The YouTube TV app reports Shorts as playing with no title or channel.
+        self.h.ctl.now_playing(TV_IP, {"sessions": [{"package": self.YT, "state": "playing"}]})
+        self.h.tick(20)
+        self.h.ctl.now_playing(TV_IP, {"sessions": [{"package": "hami.androidtv", "state": "playing"}]})
+        self.h.tick(5)
+        chans = {c["channel"]: c for c in self.hist()[0]["channels"]}
+        self.assertEqual(chans["Shorts／無標題"]["seconds"], 20)
+        self.assertEqual(chans["Shorts／無標題"]["app"], "YouTube")
+        self.assertEqual(chans["Shorts／無標題"]["titles"][0]["title"], "（無標題）")
+        self.assertEqual(chans["（無標題）"]["app"], "Hami Video")
+
     def test_paused_and_stale_do_not_count(self):
         self.play("影片A", "ch", state="paused")
         self.h.tick(30)

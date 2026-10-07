@@ -178,7 +178,8 @@ async function loadDevs(){
   devs=(await jget('/api/devices')).devices;
   $('devs').innerHTML=devs.map((d,i)=>{
     const pct=d.quotaEnabled?Math.min(100,d.usedSec/(d.quotaMin*60)*100):0;
-    const np=d.nowPlaying?'<div class="hint" style="color:var(--pri)">▶ '+esc(d.nowPlaying.title||'')+(d.nowPlaying.artist?' — '+esc(d.nowPlaying.artist):'')+'</div>':'';
+    const npTitle=p=>p.title||(/youtube\.tv/.test(p.package||'')?'YouTube Shorts／無標題':'（無標題）');
+    const np=d.nowPlaying?'<div class="hint" style="color:var(--pri)">▶ '+esc(npTitle(d.nowPlaying))+(d.nowPlaying.artist?' — '+esc(d.nowPlaying.artist):'')+'</div>':'';
     const ext=d.extendActive?'<div class="hint" style="color:var(--ok)">延長至 '+hhmm(d.extendUntil)+'</div>':'';
     const yt=(d.blockYoutube?'<div class="hint" style="color:var(--bad)">封鎖 YouTube</div>':'')+
       (d.ytDetectWarn?'<div class="hint" style="color:var(--warn)" title="正在使用 YouTube App 且流量很大，卻幾乎沒有辨識到 YouTube 影片">⚠️ YouTube 辨識可能失效</div>':'');
