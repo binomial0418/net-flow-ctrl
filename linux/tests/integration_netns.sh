@@ -42,7 +42,10 @@ rtr sysctl -qw net.ipv4.ip_forward=1
 # nf-wan plays the internet and the home LAN at once: 10.99.0.0/24 is the home
 # LAN, with the RT2600ac's static route back to the TV network.
 ip -n nf-wan route add 192.168.50.0/24 via 10.99.0.2
-sed 's|^define HOME_NET = .*|define HOME_NET = 10.99.0.0/24|' deploy/nftables.conf > $T/nftables.conf
+# 10.99.0.1 stands in for a HomePod; 10.99.0.50 for any other home-LAN host.
+sed -e 's|^define HOME_NET = .*|define HOME_NET = 10.99.0.0/24|' \
+    -e 's|elements = { 10.0.4.38, 10.0.4.87, 10.0.4.222 }|elements = { 10.99.0.1 }|' deploy/nftables.conf > $T/nftables.conf
+ip -n nf-wan addr add 10.99.0.50/24 dev w0
 ip -n nf-tv addr add 192.168.50.101/24 dev eth0; ip -n nf-tv link set eth0 up
 ip -n nf-tv route add default via 192.168.50.1
 rtr nft -f $T/nftables.conf || { echo "ruleset failed to load"; exit 1; }
@@ -88,7 +91,8 @@ check "internet NATed" "10.99.0.2" "$(tv fetch http://93.184.0.10/whoami)"
 check "home LAN sees the client" "192.168.50.101" "$(tv fetch http://10.99.0.1/whoami)"
 ip netns exec nf-tv python3 tests/fakenet.py listen 7000 & pids+=($!)
 sleep 0.5
-check "home LAN connects in" "OPEN" "$(ip netns exec nf-wan python3 tests/fakenet.py connect 192.168.50.101 7000)"
+check "HomePod connects in" "OPEN" "$(ip netns exec nf-wan python3 tests/fakenet.py connect 192.168.50.101 7000 10.99.0.1)"
+check "other home LAN host cannot" "TIMEOUT" "$(ip netns exec nf-wan python3 tests/fakenet.py connect 192.168.50.101 7000 10.99.0.50)"
 check "internet cannot" "TIMEOUT" "$(ip netns exec nf-wan python3 tests/fakenet.py connect 192.168.50.101 7000 93.184.0.10)"
 
 echo "encrypted DNS refused"
