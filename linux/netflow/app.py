@@ -307,6 +307,7 @@ class Controller:
         if not (self.time_valid and self.st.day_key):
             return
         now = time.time()
+        hour = self.clock().hour  # wall clock, for time-of-day patterns
         for mac, rt in self.rt.items():
             if now - rt.now_playing_at >= WATCH_FRESH_SEC:
                 continue
@@ -320,7 +321,7 @@ class Controller:
                     # (ads likely look the same): count the time all the same.
                     channel = UNTITLED_YT if pkg in YOUTUBE_PACKAGES else UNTITLED
                     title = UNTITLED
-                self.history.add(self.st.day_key, mac, pkg, channel, title, 1, now)
+                self.history.add(self.st.day_key, hour, mac, pkg, channel, title, 1, now)
 
     def watch_history(self, days: int = 1, mac: str = "") -> Dict[str, Any]:
         """Viewing over the last `days` logical days (1 = today), per device

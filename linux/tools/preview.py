@@ -75,7 +75,8 @@ def build() -> Controller:
         (day, box_mac, "com.google.android.youtube.tvkids", "寶寶巴士", "交通工具兒歌", 3100),
         (day_minus(day, 3), tv_mac, yt, "這群人", "上週的影片", 2200),
     ]:
-        h.add(d, mac, pkg, ch, title, secs, time.time())
+        for hr, part in ((16, 0.3), (19, 0.5), (21, 0.2)):  # spread over the evening
+            h.add(d, hr, mac, pkg, ch, title, int(secs * part), time.time())
     ctl.rt[tv_mac].now_playing = [{"package": yt, "state": "playing", "title": "季後挑戰賽預測！", "artist": "台南Josh"}]
     ctl.rt[tv_mac].now_playing_at = time.time() + 10**6  # keep it shown in the preview
     return ctl

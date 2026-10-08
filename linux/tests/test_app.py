@@ -538,15 +538,42 @@ class WatchHistory(unittest.TestCase):
     def test_days_and_device_filter_and_retention(self):
         hist = self.h.ctl.history
         day = self.h.ctl.st.day_key
-        hist.add(20260101, TV, self.YT, "old", "t", 100, 0)  # far past the 90 days
-        hist.add(day - 1 if day % 100 > 1 else day, TV, self.YT, "yesterday", "t", 50, 0)
-        hist.add(day, "aa:bb:cc:dd:ee:ff", self.YT, "other device", "t", 5, 0)
+        hist.add(20260101, 12, TV, self.YT, "old", "t", 100, 0)  # far past the 90 days
+        hist.add(day - 1 if day % 100 > 1 else day, 12, TV, self.YT, "yesterday", "t", 50, 0)
+        hist.add(day, 12, "aa:bb:cc:dd:ee:ff", self.YT, "other device", "t", 5, 0)
         self.assertEqual(sum(d["seconds"] for d in self.hist(days=1)), 5 + (50 if day % 100 == 1 else 0))
         self.assertEqual(self.hist(days=1, mac="AA:BB:CC:DD:EE:FF")[0]["seconds"], 5)
         self.assertNotIn("old", [c["channel"] for d in self.hist(days=90) for c in d["channels"]])
         self.h.ctl.save()
         self.h.ctl = self.h.make()  # prunes on start
         self.assertEqual([r for r in hist.query(0) if r["channel"] == "old"], [])
+
+    def test_hour_of_day(self):
+        # The harness clock starts at 12:00; run across 13:00.
+        self.play("影片A", "台南Josh")
+        self.h.now = self.h.now.replace(minute=59, second=50)
+        self.h.tick(20)
+        hours = self.hist()[0]["hours"]
+        self.assertEqual((hours[12], hours[13], sum(hours)), (10, 10, 20))
+
+    def test_migrates_a_version_1_database(self):
+        import sqlite3
+        from netflow.history import History
+        path = Path(self._tmp.name) / "old.db"
+        db = sqlite3.connect(str(path))
+        db.execute("""CREATE TABLE watch (day INTEGER NOT NULL, mac TEXT NOT NULL, package TEXT NOT NULL,
+                      channel TEXT NOT NULL, title TEXT NOT NULL, seconds INTEGER NOT NULL, last_ts REAL NOT NULL,
+                      PRIMARY KEY (day, mac, package, channel, title))""")
+        db.execute("INSERT INTO watch VALUES (20261007, ?, ?, '台南Josh', '影片A', 300, 1.0)", (TV, self.YT))
+        db.commit()
+        db.close()
+        h = History(path)
+        rows = h.query(0)
+        self.assertEqual([(r["hour"], r["seconds"]) for r in rows], [(-1, 300)])  # kept, hour unknown
+        h.add(20261007, 20, TV, self.YT, "台南Josh", "影片A", 5, 2.0)  # new rows carry the hour
+        self.assertEqual(sorted((r["hour"], r["seconds"]) for r in h.query(0)), [(-1, 300), (20, 5)])
+        h.close()
+        self.assertEqual(History(path).query(0)[0]["hour"] in (-1, 20), True)  # reopening: no second migration
 
     def test_survives_restart(self):
         self.play("影片A", "台南Josh")

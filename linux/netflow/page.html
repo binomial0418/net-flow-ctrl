@@ -255,7 +255,12 @@ async function loadHist(){
   if(!h.devices.length){$('hist').innerHTML='<div class="hint">'+range+' 沒有觀看記錄</div>';return}
   $('hist').innerHTML=h.devices.map(d=>{
     const top=d.channels.length?d.channels[0].seconds:1;
-    return '<div style="margin:6px 0 14px"><b>'+esc(d.name)+'</b> <span class="hint">'+range+' 共 '+dur(d.seconds)+'</span>'+
+    const hmax=Math.max(...d.hours);
+    // Time of day: 24 small bars, taller = more viewing in that hour.
+    const hrs=hmax?'<div style="display:flex;align-items:flex-end;gap:2px;height:36px;margin:6px 0 2px">'+
+      d.hours.map((v,i)=>'<div title="'+i+' 點：'+dur(v)+'" style="flex:1;background:'+(v?'var(--pri)':'var(--line)')+';height:'+(v?Math.max(8,v/hmax*100):8)+'%;border-radius:2px"></div>').join('')+
+      '</div><div class="hint" style="display:flex;justify-content:space-between"><span>0 點</span><span>6</span><span>12</span><span>18</span><span>23 點</span></div>':'';
+    return '<div style="margin:6px 0 14px"><b>'+esc(d.name)+'</b> <span class="hint">'+range+' 共 '+dur(d.seconds)+'</span>'+hrs+
       '<div class="tbl"><table style="min-width:0"><tbody>'+d.channels.map((c,i)=>{
         const id='ht'+d.mac.replace(/:/g,'')+i;
         return '<tr style="cursor:pointer" onclick="const e=document.getElementById(\''+id+'\');e.style.display=e.style.display?\'\':\'none\'">'+
